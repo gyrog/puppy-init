@@ -605,15 +605,26 @@ if [ "$sortout_sfs_spec_RET" ];then
 		echo "$mount_sfs_RET"; FDRV_SPEC=''
 	fi
 fi
+ZDRV_MNTPT=''
 sortout_sfs_spec "$DISTRO_ZDRVSFS" "$ZDRV"
 if [ "$sortout_sfs_spec_RET" ];then
 	ZDRV_SPEC="$sortout_sfs_spec_RET"
 	mount_sfs "$ZDRV_SPEC" "zdrv"
 	if [ $? -eq 0 ];then
 		BELOW_DIRS="${BELOW_DIRS}${mount_sfs_RET} "
+		ZDRV_MNTPT="$mount_sfs_RET"
 	else
 		echo "$mount_sfs_RET"; ZDRV_SPEC=''
 	fi
+fi
+
+#load needed keyboard modules - initmodules
+if [ "$PIMOD" -a "$ZDRV_MNTPT" ];then
+	for ONE_MOD in ${PIMOD//,/ };do
+		display_msg "$(printf "${L_ADDING_MODULE}" "$ONE_MOD")" "-n"
+		insmod "$ZDRV_MNTPT/lib/modules/$KERNELVER/$ONE_MOD"
+		check_status $?
+	done
 fi
 
 #sortout save layer
