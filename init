@@ -65,6 +65,8 @@ L_ERR_PART_NOT_MOUNT="Mounting %s on %s as %s failed.." #printf
 L_ERR_PDRV_NOT_SPECD="Puppy install partition is not specified."
 L_ERR_NO_DISTRO_SPECS="No DISTRO_SPECS file found."
 L_LOADING_AUFS="Building the overlay stack..."
+L_ERR_PDRV_NO_DEFAULT="Default filename for puppy...sfs not defined."
+L_ERR_NO_OVERLAY="OverlayFs is not supported by this kernel."
 
 ##############################################################
 
@@ -234,7 +236,12 @@ get_part_info() {
 		ONE_LINE=${ONE_LINE#*:}
 		ONE_TYPE="${ONE_LINE#* TYPE=\"}"; ONE_TYPE="${ONE_TYPE%%\"*}"
 		[ "$ONE_TYPE" = "swap" ] && continue
-		ONE_UUID="${ONE_LINE#* UUID=\"}"; ONE_UUID="${ONE_UUID%%\"*}"
+		ONE_UUID="${ONE_LINE#* UUID=\"}"
+		if [ "${ONE_UUID:0:1}" = " " ];then # no UUID
+			ONE_UUID=""
+		else
+			ONE_UUID="${ONE_UUID%%\"*}"
+		fi
 		ONE_LABEL="${ONE_LINE#* LABEL=\"}"
 		if [ "${ONE_LABEL:0:1}" = " " ];then # no LABEL
 			ONE_LABEL=""
@@ -302,7 +309,6 @@ expand_file_spec() {
 	# "$2" = an sfs spec e.g. sdb2:/pup/test_it.sfs
 	# uses global PSUBDIR and PDRV_PART
 	expand_file_spec_RET=""
-	[ "${1}" ] || return
 	local LO_ID LO_FN LO_PART
 	LO_ID=""; LO_FN=""; LO_PART=""
 	if [ "${2}" ];then
@@ -319,15 +325,9 @@ expand_file_spec() {
 	[ "$LO_PART" ] || LO_PART="$PDRV_PART"
 	if [ "$LO_FN" ];then
 		case $LO_FN in
-			*/*)
-				[ "${LO_FN:0:1}" != "/" ] && LO_FN="/$LO_FN"
-				#[ "${LO_FN:0:1}" != "/" ] && LO_FN="$PSUBDIR/$LO_FN"
-				[ "${LO_FN##*/}" ] || LO_FN="${LO_FN}${1}"
-			;;
-			*)
-				LO_FN="$PSUBDIR/$LO_FN"
-			;;
+			*/) LO_FN="${LO_FN}${1}" ;;
 		esac
+		[ "${LO_FN:0:1}" != "/" ] && LO_FN="$PSUBDIR/$LO_FN"
 	else
 		LO_FN="$PSUBDIR/${1}"
 	fi
@@ -339,13 +339,18 @@ sortout_sfs_spec() {
 	# "$2" = an sfs spec e.g. sdb2:/pup/test_it.sfs
 	# uses global PSUBDIR and PDRV_PART
 	sortout_sfs_spec_RET=""
-	[ "${1}" ] || return
-	if [ -f "/${1}" ];then
+	if [ "${1}" -a -f "/${1}" ];then
 		# humungus initrd support
 		sortout_sfs_spec_RET="rootfs:/${1}"
 	else
 		expand_file_spec "${1}" "${2}"
-		[ "$expand_file_spec_RET" ] && sortout_sfs_spec_RET="$expand_file_spec_RET"
+		if [ "$expand_file_spec_RET" ];then
+			case $expand_file_spec_RET in
+				:*) return 1 ;;
+				*/) return 3 ;;
+			esac
+			sortout_sfs_spec_RET="$expand_file_spec_RET"
+		fi
 	fi
 } 
 
@@ -528,19 +533,18 @@ get_part_info
 #get SPECS files - in initrd.gz or specified install dir
 #both will be accessed from the same directory
 sortout_sfs_spec "DISTRO_SPECS" "$PDRV"
-if [ "$sortout_sfs_spec_RET" ];then
-	spec2file "$sortout_sfs_spec_RET"
-	if [ $? -eq 0 ];then
-		if [ -f "$spec2file_RET" ];then
-			echo "Using $spec2file_RET"
-			. "$spec2file_RET" #DISTRO_SPECS has DISTRO_VERSION, DISTRO_FILE_PREFIX
-			cp -a "$spec2file_RET" /tmp/
-		fi
-		if [ "$PNOBS" != "yes" -a -f "${spec2file_RET%/*}/BOOT_SPECS" ];then
-			echo "Using ${spec2file_RET%/*}/BOOT_SPECS"
-			process_boot_specs "${spec2file_RET%/*}/BOOT_SPECS"
-			cp -a "${spec2file_RET%/*}/BOOT_SPECS" /tmp/
-		fi
+[ $? -eq 0 ] || fatal_error "$L_ERR_PDRV_NOT_SPECD"
+spec2file "$sortout_sfs_spec_RET"
+if [ $? -eq 0 ];then
+	if [ -f "$spec2file_RET" ];then
+		echo "Using $spec2file_RET"
+		. "$spec2file_RET" #DISTRO_SPECS has DISTRO_VERSION, DISTRO_FILE_PREFIX
+		cp -a "$spec2file_RET" /tmp/
+	fi
+	if [ "$PNOBS" != "yes" -a -f "${spec2file_RET%/*}/BOOT_SPECS" ];then
+		echo "Using ${spec2file_RET%/*}/BOOT_SPECS"
+		process_boot_specs "${spec2file_RET%/*}/BOOT_SPECS"
+		cp -a "${spec2file_RET%/*}/BOOT_SPECS" /tmp/
 	fi
 fi
 [ "$DISTRO_FILE_PREFIX" ] || fatal_error "$L_ERR_NO_DISTRO_SPECS"
@@ -554,12 +558,15 @@ echo -e "\\033[0;34m ***\\033[0;39m" > /dev/console
 
 #ensure there is a pdrv
 sortout_sfs_spec "$DISTRO_PUPPYSFS" "$PDRV"
-if [ "$sortout_sfs_spec_RET" ];then
+STATUS=$?
+if [ $STATUS -eq 0 ];then
 	PDRV_SPEC="$sortout_sfs_spec_RET"
 	PDRV_PART=${PDRV_SPEC%:*}
 	[ "$PSUBDIR" ] || { PSUBDIR=${PDRV_SPEC#*:}; PSUBDIR=${PSUBDIR%/*}; }
+else
+	[ $STATUS -eq 1 ] && fatal_error "$L_ERR_PDRV_NOT_SPECD"
+	[ $STATUS -eq 3 ] && fatal_error "$L_ERR_PDRV_NO_DEFAULT"
 fi
-[ "$PDRV_PART" ] || fatal_error "$L_ERR_PDRV_NOT_SPECD"
 
 #create default size tmpfs
 [ -d /mnt/tmpfs ] || mkdir -p /mnt/tmpfs
@@ -618,16 +625,28 @@ if [ "$sortout_sfs_spec_RET" ];then
 	fi
 fi
 
-#need overlay module
-PIMOD="${PIMOD},kernel/fs/overlayfs/overlay.ko"
-PIMOD="${PIMOD#,}" #remove a possible leading ',' 
+#check if need to load overlay module
+if [ "$ZDRV_MNTPT" ];then
+	POVERLAY="$(grep 'overlay' $ZDRV_MNTPT/lib/modules/$KERNELVER/modules.order)"
+	[ "$POVERLAY" ] && PIMOD="${PIMOD},${POVERLAY}"
+	PIMOD="${PIMOD#,}" #remove a possible leading ',' 
+
 #load needed keyboard modules - initmodules
-if [ "$PIMOD" -a "$ZDRV_MNTPT" ];then
-	for ONE_MOD in ${PIMOD//,/ };do
-		display_msg "$(printf "${L_ADDING_MODULE}" "$ONE_MOD")" "-n"
-		insmod "$ZDRV_MNTPT/lib/modules/$KERNELVER/$ONE_MOD"
-		check_status $?
-	done
+	if [ "$PIMOD" ];then
+		for ONE_MOD in ${PIMOD//,/ };do
+			display_msg "$(printf "${L_ADDING_MODULE}" "$ONE_MOD")" "-n"
+			insmod "$ZDRV_MNTPT/lib/modules/$KERNELVER/$ONE_MOD"
+			check_status $?
+		done
+	fi
+
+#ensure that we have overlay support
+	[ "$POVERLAY" ] || POVERLAY="$(grep 'overlay' $ZDRV_MNTPT/lib/modules/$KERNELVER/modules.builtin)"
+fi
+if [ "$POVERLAY" ];then
+	POVERLAY='yes'
+else
+	fatal_error "$L_ERR_NO_OVERLAY"
 fi
 
 #sortout save layer
@@ -647,6 +666,7 @@ if [ "$PNOCOPY" ];then
 					SAVE_REL=${SAVE_SPEC#*:}
 					[ "$(echo -n $KEEPMOUNTED | grep -m1 "$SAVE_PART")" ] || KEEPMOUNTED="${KEEPMOUNTED}${SAVE_PART} "
 					RW_DIR="${ensure_mounted_RET}${SAVE_REL}"
+					WK_DIR="${RW_DIR%/*}/${DISTRO_FILE_PREFIX}work"
 					if [ -d "$RW_DIR" ];then
 						PUPMODE=12
 						SAVE_LAYER='/pup_rw'
@@ -665,22 +685,28 @@ fi
 if [ "$RW_DIR" = "" ];then
 	[ -d "/mnt/tmpfs/pup_rw" ] || mkdir /mnt/tmpfs/pup_rw
 	RW_DIR='/mnt/tmpfs/pup_rw'
+	WK_DIR='/mnt/tmpfs/pup_wk'
 fi
 
 umount_unneeded
 
 #build stack
 display_msg "$L_LOADING_AUFS" "-n"
-echo " Using $RW_DIR as the read/write directory"
-WK_DIR="${RW_DIR%/*}/pup_wk"
+
+#build sfs stack
 LOW_LIST="${ABOVE_DIRS// /:}${PDRV_DIR}:${BELOW_DIRS// /:}"
 LOW_LIST="${LOW_LIST%:}" #remove possible trailing ':'
 echo " Using $LOW_LIST as the read only directories"
 NEWUNIONRECORD="$LOW_LIST"
+[ -d /pup_sfss ] || mkdir /pup_sfss
+mount -t overlay -o lowerdir=${LOW_LIST} overlay /pup_sfss >/dev/console 2>&1
+[ $? -eq 0 ] || { check_status 1; fatal_error "$L_ERROR_FAILED_AUFS_STACK"; }
 
+#build full stack
+echo " Using $RW_DIR as the read/write directory"
 [ -d "$WK_DIR" ] || mkdir -p "$WK_DIR"
 [ -d /pup_new ] || mkdir /pup_new
-mount -t overlay -o lowerdir=${LOW_LIST},upperdir=${RW_DIR},workdir=${WK_DIR} overlay /pup_new >/dev/console 2>&1
+mount -t overlay -o lowerdir=/pup_sfss,upperdir=${RW_DIR},workdir=${WK_DIR} overlay /pup_new >/dev/console 2>&1
 [ $? -eq 0 ] || { check_status 1; fatal_error "$L_ERROR_FAILED_AUFS_STACK"; }
 check_status 0
 
@@ -705,6 +731,7 @@ echo "ADRV='${ADRV_SPEC/:/,,}'"
 echo "YDRV='${YDRV_SPEC/:/,,}'"
 echo "PSUBDIR='$PSUBDIR'"
 echo "PNOSAVE='$PNOSAVE'"
+echo "POVERLAY='$POVERLAY'"
 [ -f /sbin/set_plang ] && plang_pupstate #echo
 ) > /pup_new/etc/rc.d/PUPSTATE
 
