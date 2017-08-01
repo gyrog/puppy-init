@@ -296,7 +296,7 @@ ensure_mounted() {
 	if [ "$MP" = "" ];then
 		get_fstype "${1}"
 		[ "$get_fstype_RET" ] || { ensure_mounted_RET="$(printf "$L_ERR_PART_NOT_FOUND" "${1}")"; return 1; }
-		MP="/mnt/dev_${1}"
+		MP="/mnt/${1}"
 		[ -d "$MP" ] || mkdir -p $MP
 		mnt_func $get_fstype_RET "/dev/${1}" "$MP" #-t $get_fstype_RET /dev/$1 $MP
 		[ $? -eq 0 ] || { ensure_mounted_RET="$(printf "$L_ERR_PART_NOT_MOUNT" "${1}" "$MP" "$get_fstype_RET")"; return 1; }
@@ -661,17 +661,19 @@ fi
 PUPMODE=5
 
 #setup rw directory
-RW_DIR=''; SAVE_PART=''
-if [ "$PNOCOPY" ];then
-	case $DEV1FS in
-		ext2|ext3|ext4|reiserfs|minix|f2fs)
-			expand_file_spec "${DISTRO_FILE_PREFIX}save" "$PSAVE"
-			if [ $? -eq 0 ];then
-				SAVE_SPEC="$expand_file_spec_RET"
-				SAVE_PART=${SAVE_SPEC%%:*}
+RW_DIR=''; SAVE_LAYER=''
+expand_file_spec "${DISTRO_FILE_PREFIX}save" "$PSAVE"
+if [ $? -eq 0 ];then
+	SAVE_SPEC="$expand_file_spec_RET"
+	SAVE_PART=${SAVE_SPEC%%:*}
+	SAVE_REL=${SAVE_SPEC#*:}
+	PSAVEPART=$SAVE_PART
+	PSAVEDIR=${SAVE_REL%/*}
+	if [ "$PNOCOPY" ];then
+		case $DEV1FS in
+			ext2|ext3|ext4|reiserfs|minix|f2fs)
 				ensure_mounted "$SAVE_PART"
 				if [ $? -eq 0 ];then
-					SAVE_REL=${SAVE_SPEC#*:}
 					[ "$(echo -n $KEEPMOUNTED | grep -m1 "$SAVE_PART")" ] || KEEPMOUNTED="${KEEPMOUNTED}${SAVE_PART} "
 					RW_DIR="${ensure_mounted_RET}${SAVE_REL}"
 					WK_DIR="${RW_DIR%/*}/${DISTRO_FILE_PREFIX}work"
@@ -679,15 +681,11 @@ if [ "$PNOCOPY" ];then
 						PUPMODE=12
 						SAVE_LAYER='/pup_rw'
 						PUP_HOME="$ensure_mounted_RET"
-					else
-						SAVE_PART=''; SAVE_SPEC=''
 					fi
-				else
-					SAVE_PART=''; SAVE_SPEC=''
 				fi
-			fi
-		;;
-	esac
+			;;
+		esac
+	fi
 fi
 if [ "$RW_DIR" = "" ];then
 	RW_DIR='/mnt/tmpfs/pup_rw'
@@ -698,7 +696,7 @@ fi
 umount_unneeded
 
 #build full stack
-if [ "$SAVE_PART" ];then
+if [ "$SAVE_LAYER" ];then
 	display_msg "$(printf "${L_LOADING_PUPSAVE}" "$SAVE_REL" "$SAVE_PART")" "-n"
 else
 	display_msg "$(printf "${L_LOADING_RW}" "$SAVE_REL" )" "-n"
@@ -730,6 +728,8 @@ echo "FDRV='$(echo_spec $FDRV_SPEC)'"
 echo "ADRV='$(echo_spec $ADRV_SPEC)'"
 echo "YDRV='$(echo_spec $YDRV_SPEC)'"
 echo "PSUBDIR='$PSUBDIR'"
+echo "PSAVEPART='$PSAVEPART'"
+echo "PSAVEDIR='$PSAVEDIR'"
 echo "PNOSAVE='$PNOSAVE'"
 echo "POVERLAY='$POVERLAY'"
 [ -f /sbin/set_plang ] && plang_pupstate #echo
