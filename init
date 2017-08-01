@@ -64,7 +64,8 @@ L_ERR_PART_NOT_FOUND="Puppy partition [%s] not found." #printf
 L_ERR_PART_NOT_MOUNT="Mounting %s on %s as %s failed.." #printf
 L_ERR_PDRV_NOT_SPECD="Puppy install partition is not specified."
 L_ERR_NO_DISTRO_SPECS="No DISTRO_SPECS file found."
-L_LOADING_AUFS="Building the overlay stack..."
+L_LOADING_SFS="Loading %s as read only overlay..." #printf
+L_LOADING_RW="Using %s as read/write directory..." #printf
 L_ERR_PDRV_NO_DEFAULT="Default filename for puppy...sfs not defined."
 L_ERR_NO_OVERLAY="OverlayFs is not supported by this kernel."
 
@@ -278,6 +279,13 @@ decode_part_id() {
 	[ -f "/tmp/disk/by-uuid/${1}" ] && read decode_part_id_RET < "/tmp/disk/by-uuid/${1}"
 }
 
+echo_spec() {
+	# "$1" = an sfs spec e.g. sdb2:/pup/test_it.sfs
+	[ "$1" ] || return
+	get_fstype "${1%%:*}"
+	echo "${1%%:*},${get_fstype_RET},${1#*:}"
+}
+
 wait_for_usb() {
 	[ -e /tmp/flag-usb-ready ] && return
 	display_msg "$L_WAITING_FOR_USB" "-n"
@@ -409,14 +417,15 @@ mount_sfs() {
 	# "$1" = an sfs spec e.g. sdb2:/pup/test_it.sfs
 	# "$2" = sfs ident e.g. pdrv or fdrv
 	mount_sfs_RET=""
-	local LO_PART LO_REL LO_IDENT LO_FULL_NAME LO_BASE_NAME LO_NEEDED LO_SUFX LO_MP
+	local LO_PART LO_REL LO_IDENT LO_FULL_NAME LO_NEEDED LO_SUFX LO_MP LO_TIME
 	LO_PART="${1%%:*}"; LO_REL="${1#*:}"
 	spec2file "$1"
 	[ $? -eq 0 ] || { mount_sfs_RET="$spec2file_RET"; return 3; }
-	LO_FULL_NAME="$spec2file_RET"; LO_BASE_NAME="${spec2file_RET##*/}"
+	LO_FULL_NAME="$spec2file_RET"
 	[ -f "$LO_FULL_NAME" ] || { mount_sfs_RET="$(printf "$L_ERR_SFS_NOT_FOUND" "$LO_REL" "$LO_PART")"; return 1; }
 	# validate sfs file here
 	[ -s "$LO_FULL_NAME" ] || { mount_sfs_RET="$(printf "$L_ERR_ONEPART_NOT_OK" "$LO_PART" "$LO_REL")"; return 3; }
+	LO_TIME="$(stat -c %Y "$LO_FULL_NAME")"
 	if [ "$2" = "pdrv" ];then
 		#for backwards compatibility
 		LO_IDENT="$L_LOAD_MESSAGE"
@@ -425,7 +434,7 @@ mount_sfs() {
 		LO_IDENT="$2"
 		LO_SUFX="${2:0:1}"
 	fi
-	display_msg "$(printf "$L_USING_FILE" "$LO_BASE_NAME" "$LO_IDENT")" "-n"
+	display_msg "$(printf "$L_USING_FILE" "${spec2file_RET##*/}" "$LO_IDENT")" "-n"
 	#error exits after this must include "check_status 1;"
 	LO_NEEDED='yes'
 	[ "LO_PART" = "rootfs" ] && COPY2RAM='yes' # humungus initrd support - force copy to ram
@@ -444,18 +453,8 @@ mount_sfs() {
 	if [ "$LO_NEEDED" = "yes" ];then
 		[ "$(echo -n $KEEPMOUNTED | grep -m1 "$LO_PART")" ] || KEEPMOUNTED="${KEEPMOUNTED}${LO_PART} "
 	fi
-	mount_sfs_RET="$LO_MP"
+	mount_sfs_RET="$LO_MP:$LO_TIME"
 	check_status 0
-}
-
-append_rr() {
-	# "$1" = a branch directories e.g. "/pup_f"
-	append_rr_RET=''
-	echo " Appending $1 to aufs stack as rr branch."
-	mount -o remount,append:${1}=rr /pup_new
-	[ $? -eq 0 ] || { append_rr_RET="$(printf "$L_ERR_AUFS_SFS_FAILED" "${1}=rr")"; return 1; }
-	NEWUNIONRECORD="${NEWUNIONRECORD}${1#/} "
-	return 0
 }
 
 #=============================================================
@@ -575,18 +574,18 @@ mount -t tmpfs tmpfs /mnt/tmpfs
 #mount pdrv
 mount_sfs "$PDRV_SPEC" "pdrv"
 [ $? -eq 0 ] || fatal_error "$mount_sfs_RET"
-PDRV_DIR="$mount_sfs_RET"
+PDRV_MNT="$mount_sfs_RET"
 get_fstype "$PDRV_PART"
 DEV1FS="$get_fstype_RET"
 
 #mount optional puppy sfs's
-ABOVE_DIRS=''
+ABOVE_MNTS=''
 sortout_sfs_spec "$DISTRO_ADRVSFS" "$ADRV"
 if [ "$sortout_sfs_spec_RET" ];then
 	ADRV_SPEC="$sortout_sfs_spec_RET"
 	mount_sfs "$ADRV_SPEC" "adrv"
 	if [ $? -eq 0 ];then
-		ABOVE_DIRS="${ABOVE_DIRS}${mount_sfs_RET} "
+		ABOVE_MNTS="${ABOVE_MNTS}${mount_sfs_RET} "
 	else
 		echo "$mount_sfs_RET"; ADRV_SPEC=''
 	fi
@@ -596,18 +595,18 @@ if [ "$sortout_sfs_spec_RET" ];then
 	YDRV_SPEC="$sortout_sfs_spec_RET"
 	mount_sfs "$YDRV_SPEC" "ydrv"
 	if [ $? -eq 0 ];then
-		ABOVE_DIRS="${ABOVE_DIRS}${mount_sfs_RET} "
+		ABOVE_MNTS="${ABOVE_MNTS}${mount_sfs_RET} "
 	else
 		echo "$mount_sfs_RET"; YDRV_SPEC=''
 	fi
 fi
-BELOW_DIRS=''
+BELOW_MNTS=''
 sortout_sfs_spec "$DISTRO_FDRVSFS" "$FDRV"
 if [ "$sortout_sfs_spec_RET" ];then
 	FDRV_SPEC="$sortout_sfs_spec_RET"
 	mount_sfs "$FDRV_SPEC" "fdrv"
 	if [ $? -eq 0 ];then
-		BELOW_DIRS="$BELOW_DIRS$mount_sfs_RET "
+		BELOW_MNTS="$BELOW_MNTS$mount_sfs_RET "
 	else
 		echo "$mount_sfs_RET"; FDRV_SPEC=''
 	fi
@@ -618,35 +617,46 @@ if [ "$sortout_sfs_spec_RET" ];then
 	ZDRV_SPEC="$sortout_sfs_spec_RET"
 	mount_sfs "$ZDRV_SPEC" "zdrv"
 	if [ $? -eq 0 ];then
-		BELOW_DIRS="${BELOW_DIRS}${mount_sfs_RET} "
-		ZDRV_MNTPT="$mount_sfs_RET"
+		BELOW_MNTS="${BELOW_MNTS}${mount_sfs_RET} "
+		ZDRV_MNTPT="${mount_sfs_RET%%:*}"
 	else
 		echo "$mount_sfs_RET"; ZDRV_SPEC=''
 	fi
 fi
 
-#check if need to load overlay module
-if [ "$ZDRV_MNTPT" ];then
-	POVERLAY="$(grep 'overlay' $ZDRV_MNTPT/lib/modules/$KERNELVER/modules.order)"
-	[ "$POVERLAY" ] && PIMOD="${PIMOD},${POVERLAY}"
-	PIMOD="${PIMOD#,}" #remove a possible leading ',' 
+#ensure have overlay support
+[ -d /sys/module/overlay ] && POVERLAY='yes'
+#if it's a module, insmod it
+if [ "$POVERLAY" = "" -a "$ZDRV_MNTPT" ];then
+	OVER_FN="$(grep 'overlay' $ZDRV_MNTPT/lib/modules/$KERNELVER/modules.order)"
+	if [ "$OVER_FN" ];then
+		display_msg "$(printf "${L_ADDING_MODULE}" "$OVER_FN")" "-n"
+		insmod "$ZDRV_MNTPT/lib/modules/$KERNELVER/$OVER_FN"
+		check_status $?
+		POVERLAY='yes'
+	fi
+fi
+[ "$POVERLAY" ] || fatal_error "$L_ERR_NO_OVERLAY"
+
+#build sfs stack
+NEWUNIONRECORD="${ABOVE_MNTS}${PDRV_MNT} ${BELOW_MNTS}"; NEWUNIONRECORD="${NEWUNIONRECORD% }"
+for ONE_DIR in $NEWUNIONRECORD;do
+	LOW_LIST="${LOW_LIST}${ONE_DIR%%:*}:"
+done
+LOW_LIST="${LOW_LIST%:}" #remove trailing ':'
+display_msg "$(printf "${L_LOADING_SFS}" "$LOW_LIST")" "-n"
+[ -d /pup_sfss ] || mkdir /pup_sfss
+mount -t overlay -o ro,noatime,lowerdir=${LOW_LIST} overlay /pup_sfss >/dev/console 2>&1
+[ $? -eq 0 ] || { check_status 1; fatal_error "$L_ERROR_FAILED_AUFS_STACK"; }
+check_status 0
 
 #load needed keyboard modules - initmodules
-	if [ "$PIMOD" ];then
-		for ONE_MOD in ${PIMOD//,/ };do
-			display_msg "$(printf "${L_ADDING_MODULE}" "$ONE_MOD")" "-n"
-			insmod "$ZDRV_MNTPT/lib/modules/$KERNELVER/$ONE_MOD"
-			check_status $?
-		done
-	fi
-
-#ensure that we have overlay support
-	[ "$POVERLAY" ] || POVERLAY="$(grep 'overlay' $ZDRV_MNTPT/lib/modules/$KERNELVER/modules.builtin)"
-fi
-if [ "$POVERLAY" ];then
-	POVERLAY='yes'
-else
-	fatal_error "$L_ERR_NO_OVERLAY"
+if [ "$PIMOD" ];then
+	for ONE_MOD in ${PIMOD//,/ };do
+		display_msg "$(printf "${L_ADDING_MODULE}" "$ONE_MOD")" "-n"
+		insmod "/pup_sfss/lib/modules/$KERNELVER/$ONE_MOD"
+		check_status $?
+	done
 fi
 
 #sortout save layer
@@ -672,7 +682,6 @@ if [ "$PNOCOPY" ];then
 						SAVE_LAYER='/pup_rw'
 						PUP_HOME="$ensure_mounted_RET"
 					else
-						mkdir -p "$RW_DIR"
 						SAVE_PART=''; SAVE_SPEC=''
 					fi
 				else
@@ -683,27 +692,20 @@ if [ "$PNOCOPY" ];then
 	esac
 fi
 if [ "$RW_DIR" = "" ];then
-	[ -d "/mnt/tmpfs/pup_rw" ] || mkdir /mnt/tmpfs/pup_rw
 	RW_DIR='/mnt/tmpfs/pup_rw'
 	WK_DIR='/mnt/tmpfs/pup_wk'
+	SAVE_REL='/tmpfs/pup_rw'
 fi
 
 umount_unneeded
 
-#build stack
-display_msg "$L_LOADING_AUFS" "-n"
-
-#build sfs stack
-LOW_LIST="${ABOVE_DIRS// /:}${PDRV_DIR}:${BELOW_DIRS// /:}"
-LOW_LIST="${LOW_LIST%:}" #remove possible trailing ':'
-echo " Using $LOW_LIST as the read only directories"
-NEWUNIONRECORD="$LOW_LIST"
-[ -d /pup_sfss ] || mkdir /pup_sfss
-mount -t overlay -o lowerdir=${LOW_LIST} overlay /pup_sfss >/dev/console 2>&1
-[ $? -eq 0 ] || { check_status 1; fatal_error "$L_ERROR_FAILED_AUFS_STACK"; }
-
 #build full stack
-echo " Using $RW_DIR as the read/write directory"
+if [ "$SAVE_PART" ];then
+	display_msg "$(printf "${L_LOADING_PUPSAVE}" "$SAVE_REL" "$SAVE_PART")" "-n"
+else
+	display_msg "$(printf "${L_LOADING_RW}" "$SAVE_REL" )" "-n"
+fi
+[ -d "$RW_DIR" ] || mkdir -p "$RW_DIR"
 [ -d "$WK_DIR" ] || mkdir -p "$WK_DIR"
 [ -d /pup_new ] || mkdir /pup_new
 mount -t overlay -o lowerdir=/pup_sfss,upperdir=${RW_DIR},workdir=${WK_DIR} overlay /pup_new >/dev/console 2>&1
@@ -715,20 +717,20 @@ mkdir -p /pup_new/etc/rc.d
 echo "PUPMODE=$PUPMODE"
 echo "PDEV1='$PDRV_PART'"
 echo "DEV1FS='$DEV1FS'"
-echo "PUPSFS='${PDRV_SPEC/:/,,}'"
-echo "PUPSAVE='${SAVE_SPEC/:/,,}'"
+echo "PUPSFS='$(echo_spec $PDRV_SPEC)'"
+echo "PUPSAVE='$(echo_spec $SAVE_SPEC)'"
 echo "PMEDIA='$PMEDIA'"
 echo '#these directories are unionfs/aufs layers in /initrd...'
 echo "SAVE_LAYER='$SAVE_LAYER'"
-echo "PUP_LAYER='$PDRV_DIR'"
+echo "PUP_LAYER='${PDRV_MNT%%:*}'"
 echo '#The partition that has the tahrsave file is mounted here...'
 echo "PUP_HOME='$PUP_HOME'"
 echo '#(in /initrd) ...note, /mnt/home is a link to it.'
 echo '#this file has extra kernel drivers and firmware...'
-echo "ZDRV='${ZDRV_SPEC/:/,,}'"
-echo "FDRV='${FDRV_SPEC/:/,,}'"
-echo "ADRV='${ADRV_SPEC/:/,,}'"
-echo "YDRV='${YDRV_SPEC/:/,,}'"
+echo "ZDRV='$(echo_spec $ZDRV_SPEC)'"
+echo "FDRV='$(echo_spec $FDRV_SPEC)'"
+echo "ADRV='$(echo_spec $ADRV_SPEC)'"
+echo "YDRV='$(echo_spec $YDRV_SPEC)'"
 echo "PSUBDIR='$PSUBDIR'"
 echo "PNOSAVE='$PNOSAVE'"
 echo "POVERLAY='$POVERLAY'"
