@@ -298,17 +298,17 @@ ensure_mounted() {
 }
 
 expand_file_spec() {
-	# "$1" = an sfs spec e.g. sdb2:/pup/test_it.sfs
-	# "$2" = a default filename e.g. adrv_tahr_6.0.5.sfs
+	# "$1" = a default filename e.g. adrv_tahr_6.0.5.sfs
+	# "$2" = an sfs spec e.g. sdb2:/pup/test_it.sfs
 	# uses global PSUBDIR and PDRV_PART
 	expand_file_spec_RET=""
-	[ "${2}" ] || return
+	[ "${1}" ] || return
 	local LO_ID LO_FN LO_PART
 	LO_ID=""; LO_FN=""; LO_PART=""
-	if [ "${1}" ];then
-		case ${1} in
-			*:*) LO_ID="${1%%:*}"; LO_FN="${1#*:}" ;;
-			*) LO_ID="${1}" ;;
+	if [ "${2}" ];then
+		case ${2} in
+			*:*) LO_ID="${2%%:*}"; LO_FN="${2#*:}" ;;
+			*) LO_ID="${2}" ;;
 		esac
 		if [ "$LO_ID" ];then
 			decode_part_id "$LO_ID"
@@ -322,27 +322,27 @@ expand_file_spec() {
 			*/*)
 				[ "${LO_FN:0:1}" != "/" ] && LO_FN="/$LO_FN"
 				#[ "${LO_FN:0:1}" != "/" ] && LO_FN="$PSUBDIR/$LO_FN"
-				[ "${LO_FN##*/}" ] || LO_FN="${LO_FN}${2}"
+				[ "${LO_FN##*/}" ] || LO_FN="${LO_FN}${1}"
 			;;
 			*)
 				LO_FN="$PSUBDIR/$LO_FN"
 			;;
 		esac
 	else
-		LO_FN="$PSUBDIR/${2}"
+		LO_FN="$PSUBDIR/${1}"
 	fi
 	[ "$LO_PART:$LO_FN" ] && expand_file_spec_RET="$LO_PART:$LO_FN"
 }
 
 sortout_sfs_spec() {
-	# "$1" = an sfs spec e.g. sdb2:/pup/test_it.sfs
-	# "$2" = a default filename e.g. adrv_tahr_6.0.5.sfs
+	# "$1" = a default filename e.g. adrv_tahr_6.0.5.sfs
+	# "$2" = an sfs spec e.g. sdb2:/pup/test_it.sfs
 	# uses global PSUBDIR and PDRV_PART
 	sortout_sfs_spec_RET=""
-	[ "${2}" ] || return
-	if [ -f "/${2}" ];then
+	[ "${1}" ] || return
+	if [ -f "/${1}" ];then
 		# humungus initrd support
-		sortout_sfs_spec_RET="rootfs:/${2}"
+		sortout_sfs_spec_RET="rootfs:/${1}"
 	else
 		expand_file_spec "${1}" "${2}"
 		[ "$expand_file_spec_RET" ] && sortout_sfs_spec_RET="$expand_file_spec_RET"
@@ -509,7 +509,7 @@ fi
 #clear significant global variables
 KEEPMOUNTED=''
 FSCKDPARTS=''
-#NEWUNIONRECORD=''
+NEWUNIONRECORD=''
 COPY2RAM=''
 
 #set time zone
@@ -527,7 +527,7 @@ get_part_info
 
 #get SPECS files - in initrd.gz or specified install dir
 #both will be accessed from the same directory
-sortout_sfs_spec "$PDRV" "DISTRO_SPECS"
+sortout_sfs_spec "DISTRO_SPECS" "$PDRV"
 if [ "$sortout_sfs_spec_RET" ];then
 	spec2file "$sortout_sfs_spec_RET"
 	if [ $? -eq 0 ];then
@@ -553,7 +553,7 @@ echo -e "\\033[0;34m ***\\033[0;39m" > /dev/console
 [ "$PMEDIA" = "cd" ] && do_cd_stuff
 
 #ensure there is a pdrv
-sortout_sfs_spec "$PDRV" "$DISTRO_PUPPYSFS"
+sortout_sfs_spec "$DISTRO_PUPPYSFS" "$PDRV"
 if [ "$sortout_sfs_spec_RET" ];then
 	PDRV_SPEC="$sortout_sfs_spec_RET"
 	PDRV_PART=${PDRV_SPEC%:*}
@@ -574,7 +574,7 @@ DEV1FS="$get_fstype_RET"
 
 #mount optional puppy sfs's
 ABOVE_DIRS=''
-sortout_sfs_spec "$ADRV" "$DISTRO_ADRVSFS"
+sortout_sfs_spec "$DISTRO_ADRVSFS" "$ADRV"
 if [ "$sortout_sfs_spec_RET" ];then
 	ADRV_SPEC="$sortout_sfs_spec_RET"
 	mount_sfs "$ADRV_SPEC" "adrv"
@@ -584,7 +584,7 @@ if [ "$sortout_sfs_spec_RET" ];then
 		echo "$mount_sfs_RET"; ADRV_SPEC=''
 	fi
 fi
-sortout_sfs_spec "$YDRV" "$DISTRO_YDRVSFS"
+sortout_sfs_spec "$DISTRO_YDRVSFS" "$YDRV"
 if [ "$sortout_sfs_spec_RET" ];then
 	YDRV_SPEC="$sortout_sfs_spec_RET"
 	mount_sfs "$YDRV_SPEC" "ydrv"
@@ -595,7 +595,7 @@ if [ "$sortout_sfs_spec_RET" ];then
 	fi
 fi
 BELOW_DIRS=''
-sortout_sfs_spec "$FDRV" "$DISTRO_FDRVSFS"
+sortout_sfs_spec "$DISTRO_FDRVSFS" "$FDRV"
 if [ "$sortout_sfs_spec_RET" ];then
 	FDRV_SPEC="$sortout_sfs_spec_RET"
 	mount_sfs "$FDRV_SPEC" "fdrv"
@@ -605,7 +605,7 @@ if [ "$sortout_sfs_spec_RET" ];then
 		echo "$mount_sfs_RET"; FDRV_SPEC=''
 	fi
 fi
-sortout_sfs_spec "$ZDRV" "$DISTRO_ZDRVSFS"
+sortout_sfs_spec "$DISTRO_ZDRVSFS" "$ZDRV"
 if [ "$sortout_sfs_spec_RET" ];then
 	ZDRV_SPEC="$sortout_sfs_spec_RET"
 	mount_sfs "$ZDRV_SPEC" "zdrv"
@@ -624,7 +624,7 @@ RW_DIR=''; SAVE_PART=''
 if [ "$PNOCOPY" ];then
 	case $DEV1FS in
 		ext2|ext3|ext4|reiserfs|minix|f2fs)
-			expand_file_spec "$PSAVE" "${DISTRO_FILE_PREFIX}save"
+			expand_file_spec "${DISTRO_FILE_PREFIX}save" "$PSAVE"
 			if [ "$expand_file_spec_RET" ];then
 				SAVE_SPEC="$expand_file_spec_RET"
 				SAVE_PART=${SAVE_SPEC%%:*}
