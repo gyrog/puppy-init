@@ -658,6 +658,78 @@ if [ "$PIMOD" ];then
 	done
 fi
 
+split_ram_sfs() {
+	# "$1" - ram destination directory - ex: /mnt/tmpfs/pup_rw
+	# "$2" - disk destination directory - ex: /mnt/sdc2/puppy/slackosave
+	[ -f "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" ] || return
+	[ -d "${1}" ] || mkdir -p "${1}"
+	[ -d "${2}" ] || mkdir -p "${2}"
+	SFS_MNT='/pup_sv'
+	[ -d "$SFS_MNT" ] || mkdir "$SFS_MNT"
+	mount -r -t squashfs -o ro,noatime "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" "$SFS_MNT"
+	if [ $? -eq 0 ];then
+#		split into "$1" (ram) and "$2" (save folder)
+		find "$SFS_MNT" -name '*' |
+		while IFS='' read SRC_FN;do
+			DST_FN="${SRC_FN#${SFS_MNT}}"
+			[ "${DST_FN:0:7}" = "/initrd" ] && continue
+			if [ -L "$SRC_FN" ];then
+				[ -d "${2}${DST_FN%/*}" ] || mkdir -p "${2}${DST_FN%/*}"
+				cp -af "$SRC_FN" "${2}${DST_FN}"
+			elif [ -d "$SRC_FN" ];then
+				continue
+			elif [ -f "$SRC_FN" ];then
+				[ -d "${2}${DST_FN%/*}" ] || mkdir -p "${2}${DST_FN%/*}"
+				cp -af "$SRC_FN" "${2}${DST_FN}"
+			else
+				if [ "$(stat -c %f "$SRC_FN")" = "2000" ];then
+					[ -e "${2}${DST_FN}" ] && [ ! -e "/pup_sfss${DST_FN}" ] && { rm "${2}${DST_FN}"; continue; }
+				fi
+				[ -d "${1}${DST_FN%/*}" ] || mkdir -p "${1}${DST_FN%/*}"
+				cp -af "$SRC_FN" "${1}${DST_FN}"
+			fi
+		done
+		umount "$SFS_MNT"
+		if [ "$PNOSAVE" != "yes" ];then
+			[ -f "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak" ] && rm "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak"
+			mv "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak"
+		fi
+	fi
+	rmdir "$SFS_MNT"
+}
+
+copy_ram_sfs() {
+	# "$1" - destination directory - ex: /mnt/tmpfs/pup_rw
+	[ -f "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" ] || return
+	[ -d "${1}" ] || mkdir -p "${1}"
+	SFS_MNT='/pup_sv'
+	[ -d "$SFS_MNT" ] || mkdir "$SFS_MNT"
+	mount -r -t squashfs -o ro,noatime "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" "$SFS_MNT"
+	if [ $? -eq 0 ];then
+		find "$SFS_MNT" -name '*' |
+		while IFS='' read SRC_FN;do
+			DST_FN="${SRC_FN#${SFS_MNT}}"
+			case ${DST_FN:0:4} in
+				/sys|/tmp|/mnt) continue ;;
+			esac
+			[ "${DST_FN:0:7}" = "/initrd" ] && continue
+			if [ -L "$SRC_FN" ];then
+				cp -af "$SRC_FN" "${1}${DST_FN}"
+			elif [ -d "$SRC_FN" ];then
+				[ -d "${1}${DST_FN}" ] || mkdir "${1}${DST_FN}"
+			else
+				cp -af "$SRC_FN" "${1}${DST_FN}"
+			fi
+		done
+		umount "$SFS_MNT"
+		if [ "$PNOSAVE" != "yes" -o "$(stat -Lfc %T "${1}")" != "tmpfs" ];then
+			[ -f "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak" ] && rm "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak"
+			mv "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak"
+		fi
+	fi
+	rmdir "$SFS_MNT"
+}
+
 #sortout save layer
 PUPMODE=5
 
@@ -681,87 +753,39 @@ else
 			case $get_fstype_RET in
 				ext2|ext3|ext4|reiserfs|minix|f2fs) IS_LINUX='yes' ;;
 			esac
-			if [ "$PROSAVE" -a "$IS_LINUX" -a -f "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" ];then
-				RW_DIR='/mnt/tmpfs/pup_rw'
-				SFS_MNT='/pup_sv'
-				[ -d "$SFS_MNT" ] || mkdir "$SFS_MNT"
-				mount -r -t squashfs -o ro,noatime "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" "$SFS_MNT"
-				if [ $? -eq 0 ];then
-					[ -d "$RW_DIR" ] || mkdir -p "$RW_DIR"
-					[ "$(echo -n $KEEPMOUNTED | grep -m1 "$SAVE_PART")" ] || KEEPMOUNTED="${KEEPMOUNTED}${SAVE_PART} "
-					RO_DIR="${ensure_mounted_RET}${SAVE_REL}"
-					[ -d "$RO_DIR" ] || mkdir -p "$RO_DIR"
-#					split into "$RW_DIR" (ram) and "$RO_DIR" (save folder)
-					find "$SFS_MNT" -name '*' |
-					while IFS='' read SRC_FN;do
-						DST_FN="${SRC_FN#${SFS_MNT}}"
-						[ "${DST_FN:0:7}" = "/initrd" ] && continue
-						if [ -L "$SRC_FN" ];then
-							[ -d "${RO_DIR}${DST_FN%/*}" ] || mkdir -p "${RO_DIR}${DST_FN%/*}"
-							cp -af "$SRC_FN" "${RO_DIR}${DST_FN}"
-						elif [ -d "$SRC_FN" ];then
-							continue
-						elif [ -f "$SRC_FN" ];then
-							[ -d "${RO_DIR}${DST_FN%/*}" ] || mkdir -p "${RO_DIR}${DST_FN%/*}"
-							cp -af "$SRC_FN" "${RO_DIR}${DST_FN}"
-						else
-							if [ "$(stat -c %f "$SRC_FN")" = "2000" ];then
-								[ -e "${RO_DIR}${DST_FN}" ] && [ ! -e "/pup_sfss${DST_FN}" ] && { rm "${RO_DIR}${DST_FN}"; continue; }
-							fi
-							[ -d "${RW_DIR}${DST_FN%/*}" ] || mkdir -p "${RW_DIR}${DST_FN%/*}"
-							cp -af "$SRC_FN" "${RW_DIR}${DST_FN}"
-						fi
-					done
-					umount "$SFS_MNT"
-					if [ "$PNOSAVE" != "yes" ];then
-						[ -f "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak" ] && rm "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak"
-						mv "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak"
+			if [ -d "${ensure_mounted_RET}${SAVE_REL}" -a "$IS_LINUX" ];then
+				if [ "$PROSAVE" ];then
+					RW_DIR='/mnt/tmpfs/pup_rw'
+					split_ram_sfs "$RW_DIR" "${ensure_mounted_RET}${SAVE_REL}" 
+					if [ "$(ls -A "${ensure_mounted_RET}${SAVE_REL}")" ];then
+						[ "$(echo -n $KEEPMOUNTED | grep -m1 "$SAVE_PART")" ] || KEEPMOUNTED="${KEEPMOUNTED}${SAVE_PART} "
+						RO_DIR="${ensure_mounted_RET}${SAVE_REL}"
+						PUPMODE=29
+						SAVE_LAYER='/pup_ro1'
+						PUP_HOME="$ensure_mounted_RET"
 					fi
-					PUPMODE=29
-					SAVE_LAYER='/pup_ro1'
-					PUP_HOME="$ensure_mounted_RET"
+				else
+#					[ "$(ls -A "${ensure_mounted_RET}${SAVE_REL}")" ] || copy_ram_sfs "${ensure_mounted_RET}${SAVE_REL}" 
+					copy_ram_sfs "${ensure_mounted_RET}${SAVE_REL}" 
+					if [ "$(ls -A "${ensure_mounted_RET}${SAVE_REL}")" ];then
+						[ "$(echo -n $KEEPMOUNTED | grep -m1 "$SAVE_PART")" ] || KEEPMOUNTED="${KEEPMOUNTED}${SAVE_PART} "
+						RW_DIR="${ensure_mounted_RET}${SAVE_REL}"
+						WK_DIR="${RW_DIR%/*}/${DISTRO_FILE_PREFIX}work"
+						PUPMODE=12
+						SAVE_LAYER='/pup_rw'
+						PUP_HOME="$ensure_mounted_RET"
+					fi
 				fi
-				rmdir "$SFS_MNT"
-			elif [ "$IS_LINUX" -a -d "${ensure_mounted_RET}${SAVE_REL}" ];then
-				[ "$(echo -n $KEEPMOUNTED | grep -m1 "$SAVE_PART")" ] || KEEPMOUNTED="${KEEPMOUNTED}${SAVE_PART} "
-				RW_DIR="${ensure_mounted_RET}${SAVE_REL}"
-				WK_DIR="${RW_DIR%/*}/${DISTRO_FILE_PREFIX}work"
-				SAVE_LAYER='/pup_rw'
-				if [ "$(ls "$RW_DIR")" ];then
-					PUPMODE=12
-					PUP_HOME="$ensure_mounted_RET"
-				fi
-			elif [ -f "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" ];then
-				RW_DIR='/mnt/tmpfs/pup_rw'
-				SFS_MNT='/pup_sv'
-				[ -d "$SFS_MNT" ] || mkdir "$SFS_MNT"
-				mount -r -t squashfs -o ro,noatime "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" "$SFS_MNT"
-				if [ $? -eq 0 ];then
+			fi
+			if [ $PUPMODE -eq 5 ];then
+				if [ -f "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" ];then
+					RW_DIR='/mnt/tmpfs/pup_rw'
 					echo "Priming $RW_DIR from ${ensure_mounted_RET}${SAVE_REL}.ram.sfs"
-					[ -d "$RW_DIR" ] || mkdir -p "$RW_DIR"
-					find "$SFS_MNT" -name '*' |
-					while IFS='' read SRC_FN;do
-						DST_FN="${SRC_FN#${SFS_MNT}}"
-						case ${DST_FN:0:4} in
-							/sys|/tmp|/mnt) continue ;;
-						esac
-						[ "${DST_FN:0:7}" = "/initrd" ] && continue
-						if [ -L "$SRC_FN" ];then
-							cp -af "$SRC_FN" "${RW_DIR}${DST_FN}"
-						elif [ -d "$SRC_FN" ];then
-							[ -d "${RW_DIR}${DST_FN}" ] || mkdir "${RW_DIR}${DST_FN}"
-						else
-							cp -af "$SRC_FN" "${RW_DIR}${DST_FN}"
-						fi
-					done
-					umount "$SFS_MNT"
-					if [ "$PNOSAVE" != "yes" ];then
-						[ -f "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak" ] && rm "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak"
-						mv "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak"
+					copy_ram_sfs "$RW_DIR"
+					if [ "$(ls -A "$RW_DIR")" ];then
+						PUPMODE=21
 					fi
-					PUPMODE=21
 				fi
-				rmdir "$SFS_MNT"
 			fi
 		fi
 	fi
