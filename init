@@ -51,7 +51,7 @@ L_SWITCH_ROOT="Performing a 'switch_root' to the layered filesystem..."
 L_CONTINUING_LOADING="...continuing with loading %s..." #printf
 L_FOLDER_MARKED_BAD="Folder %s marked bad." #printf
 L_0_NONE="0  none"
-L_ERROR_FAILED_AUFS_STACK='Failed to create empty aufs stack'
+L_ERROR_FAILED_AUFS_STACK='Failed to create overlay stack'
 L_ADDING_MODULE="Adding module %s" #printf
 L_NO_DISTRO_SPECS="No DISTRO_SPECS file found, assuming that personal storage is empty."
 L_DEBUG_SAVE="To save debug info to a partition, type 'debugsave'"
@@ -64,7 +64,7 @@ L_ERR_PART_NOT_FOUND="Puppy partition [%s] not found." #printf
 L_ERR_PART_NOT_MOUNT="Mounting %s on %s as %s failed.." #printf
 L_ERR_PDRV_NOT_SPECD="Puppy install partition is not specified."
 L_ERR_NO_DISTRO_SPECS="No DISTRO_SPECS file found."
-L_LOADING_AUFS="Building the aufs stack..."
+L_LOADING_AUFS="Building the overlay stack..."
 
 ##############################################################
 
@@ -618,6 +618,9 @@ if [ "$sortout_sfs_spec_RET" ];then
 	fi
 fi
 
+#need overlay module
+PIMOD="${PIMOD},kernel/fs/overlayfs/overlay.ko"
+PIMOD="${PIMOD#,}" #remove a possible leading ',' 
 #load needed keyboard modules - initmodules
 if [ "$PIMOD" -a "$ZDRV_MNTPT" ];then
 	for ONE_MOD in ${PIMOD//,/ };do
@@ -667,26 +670,18 @@ fi
 umount_unneeded
 
 #build stack
-[ "$SAVE_PART" ] && display_msg "$(printf "${L_LOADING_PUPSAVE}" "$SAVE_REL" "$SAVE_PART")" "-n"
-[ -d "/pup_new" ] || mkdir /pup_new
-mount -t aufs -o udba=reval,diropq=w,br=${RW_DIR}=rw,xino=/mnt/tmpfs/.aufs.xino unionfs /pup_new 
-if [ $? -eq 0 ];then
-	[ "$SAVE_PART" ] && check_status 0
-else
-	[ "$SAVE_PART" ] && check_status 1
-	fatal_error "$L_ERROR_FAILED_AUFS_STACK"
-fi
 display_msg "$L_LOADING_AUFS" "-n"
-for ONE_DIR in $ABOVE_DIRS;do
-	append_rr "$ONE_DIR"
-	[ $? -eq 0 ] || echo "$append_rr_RET" 
-done
-append_rr "$PDRV_DIR"
-[ $? -eq 0 ] || { check_status 1; fatal_error "$append_rr_RET"; }
-for ONE_DIR in $BELOW_DIRS;do
-	append_rr "$ONE_DIR"
-	[ $? -eq 0 ] || echo "$append_rr_RET" 
-done
+echo " Using $RW_DIR as the read/write directory"
+WK_DIR="${RW_DIR%/*}/pup_wk"
+LOW_LIST="${ABOVE_DIRS// /:}${PDRV_DIR}:${BELOW_DIRS// /:}"
+LOW_LIST="${LOW_LIST%:}" #remove possible trailing ':'
+echo " Using $LOW_LIST as the read only directories"
+NEWUNIONRECORD="$LOW_LIST"
+
+[ -d "$WK_DIR" ] || mkdir -p "$WK_DIR"
+[ -d /pup_new ] || mkdir /pup_new
+mount -t overlay -o lowerdir=${LOW_LIST},upperdir=${RW_DIR},workdir=${WK_DIR} overlay /pup_new >/dev/console 2>&1
+[ $? -eq 0 ] || { check_status 1; fatal_error "$L_ERROR_FAILED_AUFS_STACK"; }
 check_status 0
 
 mkdir -p /pup_new/etc/rc.d
