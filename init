@@ -230,7 +230,7 @@ get_part_info() {
 	[ -d /tmp/disk/by-label ] || mkdir -p /tmp/disk/by-label
 	[ -d /tmp/disk/by-uuid ] || mkdir -p /tmp/disk/by-uuid
 	blkid |
-	while IFS='' read -r ONE_LINE; do
+	while IFS='' read ONE_LINE; do
 		[ "${ONE_LINE:5:4}" = "loop" ] && continue
 		ONE_PART="${ONE_LINE%%:*}"; ONE_PART="${ONE_PART#/dev/}"
 		case $ONE_PART in
@@ -623,6 +623,27 @@ if [ "$sortout_sfs_spec_RET" ];then
 	fi
 fi
 
+XTRA_MNTS=''
+if [ "$XTRA_SFS" ];then
+	IFSBAK=$IFS; IFS=','
+	for ONE_LINE in $XTRA_SFS;do
+		sortout_sfs_spec "" "$ONE_LINE"
+		if [ "$sortout_sfs_spec_RET" ];then
+			NEXT="$(losetup -f 2>/dev/null)"
+			if [ "$NEXT" ];then
+				NUM=${NEXT#/dev/loop}; NUM=${NUM#/}
+				mount_sfs "$sortout_sfs_spec_RET" "$NUM"
+				if [ $? -eq 0 ];then
+					XTRA_MNTS="${XTRA_MNTS}${mount_sfs_RET} "
+				else
+					echo "$mount_sfs_RET"
+				fi
+			fi
+		fi
+	done
+	IFS=$IFSBAK
+fi
+
 #ensure have overlay support
 [ -d /sys/module/overlay ] && POVERLAY='yes'
 #if it's a module, insmod it
@@ -638,7 +659,7 @@ fi
 [ "$POVERLAY" ] || fatal_error "$L_ERR_NO_OVERLAY"
 
 #build sfs stack
-NEWUNIONRECORD="${ABOVE_MNTS}${PDRV_MNT} ${BELOW_MNTS}"; NEWUNIONRECORD="${NEWUNIONRECORD% }"
+NEWUNIONRECORD="${ABOVE_MNTS}${PDRV_MNT} ${BELOW_MNTS}${XTRA_MNTS}"; NEWUNIONRECORD="${NEWUNIONRECORD% }"
 for ONE_DIR in $NEWUNIONRECORD;do
 	LOW_LIST="${LOW_LIST}${ONE_DIR%%:*}:"
 done
