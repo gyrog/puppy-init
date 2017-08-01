@@ -99,8 +99,8 @@ process_boot_specs() {
 do_cd_stuff() {
 	local CD_FS CD_PART BS_FILE
 	CD_FS="iso9660"
-	CD_PART="$(grep -l "$CD_FS" /tmp/partitions/* | tail -n1)"; CD_PART="${CD_PART##*/}"
-	[ "$CD_PART" ] || { CD_FS="udf"; CD_PART="$(grep -l "$CD_FS" /tmp/partitions/* | tail -n1)"; CD_PART="${CD_PART##*/}"; }
+	CD_PART="$(grep -ls "$CD_FS" /tmp/disk/* | tail -n1)"; CD_PART="${CD_PART##*/}"
+	[ "$CD_PART" ] || { CD_FS="udf"; CD_PART="$(grep -ls "$CD_FS" /tmp/disk/* | tail -n1)"; CD_PART="${CD_PART##*/}"; }
 	[ -d "/mnt/$CD_PART" ] || mkdir -p "/mnt/$CD_PART"
 	mount -t "$CD_FS" -o ro "/dev/$CD_PART" "/mnt/$CD_PART"
 	if [ $? -eq 0 ];then
@@ -113,9 +113,9 @@ do_cd_stuff() {
 #			[ "$(ls -d /mnt/$CD_PART/20[0-9][0-9]-[0-9][0-9]*)" ] && PUPMODE=77
 #		fi
 #		umount "/mnt/$CD_PART"
+		# PDRV defaults to cd partition
+		[ "$PDRV" ] || PDRV="$CD_PART"
 	fi
-	# PDRV defaults to cd partition
-	[ "$PDRV" ] || PDRV="$CD_PART"
 }
 
 fsck_func() {
@@ -224,43 +224,35 @@ fatal_error() {
 }
 
 get_part_info() {
-	local ONE_LINE ONE_PART ONE_LABEL ONE_UUID ONE_TYPE CUR_IFS
+	local ONE_LINE ONE_PART ONE_TYPE ONE_LABEL ONE_UUID ONE_PUUID
 #	ls -1 /sys/block | grep -E '^sd|^mmc|^sr' > /tmp/ALLDRVS0
 	rm -r -f /tmp/disk/by-label; rm -r -f /tmp/disk/by-uuid; rm -r -f /tmp/disk
 	[ -d /tmp/disk/by-label ] || mkdir -p /tmp/disk/by-label
 	[ -d /tmp/disk/by-uuid ] || mkdir -p /tmp/disk/by-uuid
-	CUR_IFS="$IFS"; IFS="
-"
-	for ONE_LINE in $(blkid);do
+	blkid |
+	while IFS='' read -r ONE_LINE; do
 		[ "${ONE_LINE:5:4}" = "loop" ] && continue
-		ONE_PART="${ONE_LINE%:*}"; ONE_PART="${ONE_PART#/dev/}"
-		ONE_LINE=${ONE_LINE#*:}
-		ONE_TYPE="${ONE_LINE#* TYPE=\"}"; ONE_TYPE="${ONE_TYPE%%\"*}"
+		ONE_PART="${ONE_LINE%%:*}"; ONE_PART="${ONE_PART#/dev/}"
+		case $ONE_PART in
+			*[0-9] ) ;;
+			*) continue ;; #no trailing digit
+		esac
+		ONE_LINE="~${ONE_LINE#*:}"
+		ONE_TYPE="${ONE_LINE#* TYPE=\"}" #find TYPE or "~" if missing
+		[ "${ONE_TYPE:0:1}" = "~" ] && ONE_TYPE="" || ONE_TYPE="${ONE_TYPE%%\"*}"
+		[ "$ONE_TYPE" ] || continue
 		[ "$ONE_TYPE" = "swap" ] && continue
-		ONE_UUID="${ONE_LINE#* UUID=\"}"
-		if [ "${ONE_UUID:0:1}" = " " ];then # no UUID
-			ONE_UUID=""
-		else
-			ONE_UUID="${ONE_UUID%%\"*}"
-		fi
-		ONE_LABEL="${ONE_LINE#* LABEL=\"}"
-		if [ "${ONE_LABEL:0:1}" = " " ];then # no LABEL
-			ONE_LABEL=""
-		else
-			ONE_LABEL="${ONE_LABEL%%\"*}"
-		fi
-		ONE_PUUID="${ONE_LINE#* PARTUUID=\"}"
-		if [ "${ONE_PUUID:0:1}" = " " ];then # no PARTUUID
-			ONE_PUUID=""
-		else
-			ONE_PUUID="${ONE_PUUID%%\"*}"
-		fi
+		ONE_LABEL="${ONE_LINE#* LABEL=\"}" #find LABEL or "~" if missing
+		[ "${ONE_LABEL:0:1}" = "~" ] && ONE_LABEL="" || ONE_LABEL="${ONE_LABEL%%\"*}"
+		ONE_UUID="${ONE_LINE#* UUID=\"}" #find UUID or "~" if missing
+		[ "${ONE_UUID:0:1}" = "~" ] && ONE_UUID="" || ONE_UUID="${ONE_UUID%%\"*}"
+		ONE_PUUID="${ONE_LINE#* PARTUUID=\"}" #find PARTUUID or "~" if missing
+		[ "${ONE_PUUID:0:1}" = "~" ] && ONE_PUUID="" || ONE_PUUID="${ONE_PUUID%%\"*}"
 		echo "$ONE_TYPE" > "/tmp/disk/$ONE_PART"
 		[ "$ONE_LABEL" ] && echo "$ONE_PART" > "/tmp/disk/by-label/$ONE_LABEL"
 		[ "$ONE_UUID" ] && echo "$ONE_PART" > "/tmp/disk/by-uuid/$ONE_UUID"
 		[ "$ONE_PUUID" ] && echo "$ONE_PART" > "/tmp/disk/by-uuid/$ONE_PUUID"
 	done
-	IFS="$CUR_IFS"
 }
 
 get_fstype() {
@@ -331,15 +323,25 @@ expand_file_spec() {
 		fi
 	fi
 	[ "$LO_PART" ] || LO_PART="$PDRV_PART"
-	if [ "$LO_FN" ];then
-		case $LO_FN in
-			*/) LO_FN="${LO_FN}${1}" ;;
-		esac
-		[ "${LO_FN:0:1}" != "/" ] && LO_FN="$PSUBDIR/$LO_FN"
-	else
-		LO_FN="$PSUBDIR/${1}"
-	fi
-	[ "$LO_PART:$LO_FN" ] && expand_file_spec_RET="$LO_PART:$LO_FN"
+	[ "$LO_FN" ] || LO_FN="$1"
+	case $LO_FN in
+		*/*)
+			[ "${LO_FN:0:1}" != "/" ] && LO_FN="/$LO_FN"
+#			[ "${LO_FN:0:1}" != "/" ] && LO_FN="$PSUBDIR/$LO_FN"
+			case $LO_FN in
+				*/) LO_FN="${LO_FN}${1}" ;;
+			esac
+		;;
+		*)
+			LO_FN="$PSUBDIR/$LO_FN"
+		;;
+	esac
+	#validate result
+	[ "$LO_PART" ] || return 1
+	case $LO_FN in
+		*/) return 3 ;;
+	esac
+	expand_file_spec_RET="$LO_PART:$LO_FN"
 }
 
 sortout_sfs_spec() {
@@ -352,13 +354,9 @@ sortout_sfs_spec() {
 		sortout_sfs_spec_RET="rootfs:/${1}"
 	else
 		expand_file_spec "${1}" "${2}"
-		if [ "$expand_file_spec_RET" ];then
-			case $expand_file_spec_RET in
-				:*) return 1 ;;
-				*/) return 3 ;;
-			esac
-			sortout_sfs_spec_RET="$expand_file_spec_RET"
-		fi
+		STATUS=$?
+		[ $STATUS -eq 0 ] || return $STATUS
+		sortout_sfs_spec_RET="$expand_file_spec_RET"
 	fi
 } 
 
@@ -668,7 +666,7 @@ if [ "$PNOCOPY" ];then
 	case $DEV1FS in
 		ext2|ext3|ext4|reiserfs|minix|f2fs)
 			expand_file_spec "${DISTRO_FILE_PREFIX}save" "$PSAVE"
-			if [ "$expand_file_spec_RET" ];then
+			if [ $? -eq 0 ];then
 				SAVE_SPEC="$expand_file_spec_RET"
 				SAVE_PART=${SAVE_SPEC%%:*}
 				ensure_mounted "$SAVE_PART"
