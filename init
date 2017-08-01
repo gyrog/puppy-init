@@ -302,18 +302,19 @@ expand_file_spec() {
 	# "$2" = a default filename e.g. adrv_tahr_6.0.5.sfs
 	# uses global PSUBDIR and PDRV_PART
 	expand_file_spec_RET=""
-	[ "${1}" ] || return
 	[ "${2}" ] || return
 	local LO_ID LO_FN LO_PART
 	LO_ID=""; LO_FN=""; LO_PART=""
-	case ${1} in
-		*:*) LO_ID="${1%%:*}"; LO_FN="${1#*:}" ;;
-		*) LO_ID="${1}" ;;
-	esac
-	if [ "$LO_ID" ];then
-		decode_part_id "$LO_ID"
-		[ "$decode_part_id_RET" ] || { wait_for_usb; decode_part_id "$LO_ID"; }
-		LO_PART="$decode_part_id_RET"
+	if [ "${1}" ];then
+		case ${1} in
+			*:*) LO_ID="${1%%:*}"; LO_FN="${1#*:}" ;;
+			*) LO_ID="${1}" ;;
+		esac
+		if [ "$LO_ID" ];then
+			decode_part_id "$LO_ID"
+			[ "$decode_part_id_RET" ] || { wait_for_usb; decode_part_id "$LO_ID"; }
+			LO_PART="$decode_part_id_RET"
+		fi
 	fi
 	[ "$LO_PART" ] || LO_PART="$PDRV_PART"
 	if [ "$LO_FN" ];then
@@ -346,7 +347,6 @@ sortout_sfs_spec() {
 		expand_file_spec "${1}" "${2}"
 		[ "$expand_file_spec_RET" ] && sortout_sfs_spec_RET="$expand_file_spec_RET"
 	fi
-	[ "$sortout_sfs_spec_RET" ] || sortout_sfs_spec_RET="${PDRV_PART}:${PSUBDIR}/${2}"
 } 
 
 spec2file() {
@@ -469,7 +469,7 @@ clear #clear the screen.
 [ $psubdir ] && PSUBDIR=$psubdir #boot parameter, directory for puppy files. ex: puppy220
 [ $psavemark ] && PSAVEMARK=$psavemark #100913 partition number that has/will-have save-file.
 
-#[ $PSUBDIR ] && [ "${PSUBDIR:0:1}" != "/" ] && PSUBDIR="/${PSUBDIR}" #add leading /.
+[ $PSUBDIR ] && [ "${PSUBDIR:0:1}" != "/" ] && PSUBDIR="/${PSUBDIR}" #add leading /.
 
 [ $pdev1 ] && PDRV=$pdev1 #boot parameter, partition have booted off. ex: hda3
 #100915 requested by technosaurus (formats get changed further down)...
@@ -484,13 +484,7 @@ clear #clear the screen.
 #list of kernel modules to load, ex: pimod=hid-logitech-dj.ko,kernel/drivers/hid/hid-multitouch.ko 
 [ $pimod ] && PIMOD=$pimod
 #<pupmode>:<save at shutdown>, ex: 6 or 13:no
-if [ $savemode ];then
-	case ${1} in
-		auto) PUPMODE="";  PDOSAVE="" ;;
-		*:*) PUPMODE="${savemode%%:*}"; PDOSAVE="${savemode#*:}" ;;
-		*) PUPMODE="$savemode"; PDOSAVE="" ;;
-	esac
-fi
+[ $pupmode ] && PUPMODE=$pupmode
 
 if [ "$pfix" ];then
 	for ONEFIX in $(echo -n "$pfix" | tr ',' ' ');do
@@ -504,6 +498,7 @@ if [ "$pfix" ];then
 			fsck)    PFSCK='yes';;         #do an fsck of ${DISTRO_FILE_PREFIX}save file.
 			nofsckp) PNOFSCKP='yes';;      #disable fsck before first mount of ext and fat partitions
 			nobs)    PNOBS='yes';;         #disable BOOT_SPECS file processing
+			nosave)  PNOSAVE='yes';;       #disable automatic saving at shutdown
 			debug)   PDEBUG='yes';;        #enable extra debug messages
 			[0-9]*)  PIGNORELAST=$ONEFIX;; #blacklist last $ONEFIX folders (multisession).
 			*)       echo "pfix=$ONEFIX is not a known boot parameter";;
@@ -574,6 +569,8 @@ mount -t tmpfs tmpfs /mnt/tmpfs
 mount_sfs "$PDRV_SPEC" "pdrv"
 [ $? -eq 0 ] || fatal_error "$mount_sfs_RET"
 PDRV_DIR="$mount_sfs_RET"
+get_fstype "$PDRV_PART"
+DEV1FS="$get_fstype_RET"
 
 #mount optional puppy sfs's
 ABOVE_DIRS=''
@@ -619,28 +616,33 @@ if [ "$sortout_sfs_spec_RET" ];then
 	fi
 fi
 
-umount_unneeded
-
-get_fstype "$PDRV_PART"
-DEV1FS="$get_fstype_RET"
-
+#sortout save layer
 PUPMODE=5
 
 #setup rw directory
-RW_DIR=''
+RW_DIR=''; SAVE_PART=''
 if [ "$PNOCOPY" ];then
 	case $DEV1FS in
 		ext2|ext3|ext4|reiserfs|minix|f2fs)
-			ensure_mounted "$PDRV_PART"
-			if [ $? -eq 0 ];then
-				RW_DIR="${ensure_mounted_RET}${PSUBDIR}/${DISTRO_FILE_PREFIX}save_X"
-				if [ -d "$RW_DIR" ];then
-					PUPMODE=12
-					PUPSAVE="$PDRV_PART:${PSUBDIR}/${DISTRO_FILE_PREFIX}save_X"
-					SAVE_LAYER='/pup_rw'
-					PUP_HOME="$ensure_mounted_RET"
+			expand_file_spec "$PSAVE" "${DISTRO_FILE_PREFIX}save"
+			if [ "$expand_file_spec_RET" ];then
+				SAVE_SPEC="$expand_file_spec_RET"
+				SAVE_PART=${SAVE_SPEC%%:*}
+				ensure_mounted "$SAVE_PART"
+				if [ $? -eq 0 ];then
+					SAVE_REL=${SAVE_SPEC#*:}
+					[ "$(echo -n $KEEPMOUNTED | grep -m1 "$SAVE_PART")" ] || KEEPMOUNTED="${KEEPMOUNTED}${SAVE_PART} "
+					RW_DIR="${ensure_mounted_RET}${SAVE_REL}"
+					if [ -d "$RW_DIR" ];then
+						PUPMODE=12
+						SAVE_LAYER='/pup_rw'
+						PUP_HOME="$ensure_mounted_RET"
+					else
+						mkdir -p "$RW_DIR"
+						SAVE_PART=''; SAVE_SPEC=''
+					fi
 				else
-					mkdir -p "$RW_DIR"
+					SAVE_PART=''; SAVE_SPEC=''
 				fi
 			fi
 		;;
@@ -651,10 +653,18 @@ if [ "$RW_DIR" = "" ];then
 	RW_DIR='/mnt/tmpfs/pup_rw'
 fi
 
+umount_unneeded
+
 #build stack
+[ "$SAVE_PART" ] && display_msg "$(printf "${L_LOADING_PUPSAVE}" "$SAVE_REL" "$SAVE_PART")" "-n"
 [ -d "/pup_new" ] || mkdir /pup_new
 mount -t aufs -o udba=reval,diropq=w,br=${RW_DIR}=rw,xino=/mnt/tmpfs/.aufs.xino unionfs /pup_new 
-[ $? -eq 0 ] || fatal_error "$L_ERROR_FAILED_AUFS_STACK"
+if [ $? -eq 0 ];then
+	[ "$SAVE_PART" ] && check_status 0
+else
+	[ "$SAVE_PART" ] && check_status 1
+	fatal_error "$L_ERROR_FAILED_AUFS_STACK"
+fi
 display_msg "$L_LOADING_AUFS" "-n"
 for ONE_DIR in $ABOVE_DIRS;do
 	append_rr "$ONE_DIR"
@@ -673,8 +683,8 @@ mkdir -p /pup_new/etc/rc.d
 echo "PUPMODE=$PUPMODE"
 echo "PDEV1='$PDRV_PART'"
 echo "DEV1FS='$DEV1FS'"
-echo "PUPSFS='$PDRV_SPEC'"
-echo "PUPSAVE='$PUPSAVE'"
+echo "PUPSFS='${PDRV_SPEC/:/,,}'"
+echo "PUPSAVE='${SAVE_SPEC/:/,,}'"
 echo "PMEDIA='$PMEDIA'"
 echo '#these directories are unionfs/aufs layers in /initrd...'
 echo "SAVE_LAYER='$SAVE_LAYER'"
@@ -683,22 +693,23 @@ echo '#The partition that has the tahrsave file is mounted here...'
 echo "PUP_HOME='$PUP_HOME'"
 echo '#(in /initrd) ...note, /mnt/home is a link to it.'
 echo '#this file has extra kernel drivers and firmware...'
-echo "ZDRV='$ZDRV_SPEC'"
-echo "FDRV='$FDRV_SPEC'"
-echo "ADRV='$ADRV_SPEC'"
-echo "YDRV='$YDRV_SPEC'"
+echo "ZDRV='${ZDRV_SPEC/:/,,}'"
+echo "FDRV='${FDRV_SPEC/:/,,}'"
+echo "ADRV='${ADRV_SPEC/:/,,}'"
+echo "YDRV='${YDRV_SPEC/:/,,}'"
 echo "PSUBDIR='$PSUBDIR'"
+echo "PNOSAVE='$PNOSAVE'"
 [ -f /sbin/set_plang ] && plang_pupstate #echo
 ) > /pup_new/etc/rc.d/PUPSTATE
 
-if [ -f /pup_new/etc/rc.d/BOOTCONFIG ];then
-	. /pup_new/etc/rc.d/BOOTCONFIG
+if [ $PUPMODE -eq 5 ];then
+	echo "" > /pup_new/etc/rc.d/BOOTCONFIG
+	echo "LASTUNIONRECORD=''" >> /pup_new/etc/rc.d/BOOTCONFIG
+else
+	[ -f /pup_new/etc/rc.d/BOOTCONFIG ] && . /pup_new/etc/rc.d/BOOTCONFIG
 	NEWUNIONRECORD="${NEWUNIONRECORD% }"
 	echo "PREVUNIONRECORD='$LASTUNIONRECORD'" > /pup_new/etc/rc.d/BOOTCONFIG
 	echo "LASTUNIONRECORD='$NEWUNIONRECORD'" >> /pup_new/etc/rc.d/BOOTCONFIG
-else
-	echo "" > /pup_new/etc/rc.d/BOOTCONFIG
-	echo "LASTUNIONRECORD=''" >> /pup_new/etc/rc.d/BOOTCONFIG
 fi
 
 echo -n "${L_SWITCH_ROOT}" > /dev/console
