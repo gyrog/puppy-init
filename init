@@ -690,22 +690,11 @@ if [ $? -eq 0 ];then
 					while IFS='' read SRC_FN;do
 						DST_FN="${SRC_FN#${SFS_MNT}}"
 						[ "${DST_FN:0:7}" = "/initrd" ] && continue
-						if [ -L "$SRC_FN" ];then
-							[ -d "${RW_DIR}${DST_FN%/*}" ] || mkdir -p "${RW_DIR}${DST_FN%/*}"
-							cp -af "$SRC_FN" "${RW_DIR}${DST_FN}"
+						if [ -L "$SRC_FN" -o -f "$SRC_FN" ];then
+							[ -d "${RO_DIR}${DST_FN%/*}" ] || mkdir -p "${RO_DIR}${DST_FN%/*}"
+							cp -af "$SRC_FN" "${RO_DIR}${DST_FN}"
 						elif [ -d "$SRC_FN" ];then
 							continue
-						elif [ -f "$SRC_FN" -a -s "$SRC_FN" ];then
-							case $SRC_FN in
-								*:*)
-									[ -d "${RW_DIR}${DST_FN%/*}" ] || mkdir -p "${RW_DIR}${DST_FN%/*}"
-									cp -af "$SRC_FN" "${RW_DIR}${DST_FN}"
-								;;
-								*)
-									[ -d "${RO_DIR}${DST_FN%/*}" ] || mkdir -p "${RO_DIR}${DST_FN%/*}"
-									cp -af "$SRC_FN" "${RO_DIR}${DST_FN}"
-								;;
-							esac
 						else
 							[ -d "${RW_DIR}${DST_FN%/*}" ] || mkdir -p "${RW_DIR}${DST_FN%/*}"
 							cp -af "$SRC_FN" "${RW_DIR}${DST_FN}"
@@ -731,6 +720,10 @@ if [ $? -eq 0 ];then
 				umount "$SFS_MNT"
 			fi
 			rmdir "$SFS_MNT"
+			if [ "$PNOSAVE" != "yes" ];then
+				[ -f "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak" ] && rm "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak"
+				mv "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak"
+			fi
 		fi
 	fi
 fi
