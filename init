@@ -23,7 +23,7 @@ L_DUMPING_BOOTINIT_LOG="Dumping last lines of /tmp/bootinit.log..."
 L_DUMPING_KERNEL_LOG="Dumping last lines of kernel log..."
 L_ERROR_IS_TOO_CRITICAL="Error is too critical, dropping out to console..."
 L_PAUSING_60_SECONDS="Pausing for 60 seconds..."
-L_LOADING_FILE="Loading '%s' as the %s file..." #printf
+L_USING_FILE="Using '%s' as the %s file..." #printf
 L_CANNOT_RESIZE_PUPSAVE="SORRY, cannot resize %s" #printf
 L_INCREASING_PUPSAVE='Increasing %s by %s Kbytes, please wait...' #printf
 L_LOADING_PUPSAVE='Loading personal storage %s [%s]...' #printf
@@ -64,6 +64,7 @@ L_ERR_PART_NOT_FOUND="Puppy partition [%s] not found." #printf
 L_ERR_PART_NOT_MOUNT="Mounting %s on %s as %s failed.." #printf
 L_ERR_PDRV_NOT_SPECD="Puppy install partition is not specified."
 L_ERR_NO_DISTRO_SPECS="No DISTRO_SPECS file found."
+L_LOADING_AUFS="Building the aufs stack..."
 
 ##############################################################
 
@@ -251,6 +252,7 @@ get_part_info() {
 		[ "$ONE_UUID" ] && echo "$ONE_PART" > "/tmp/disk/by-uuid/$ONE_UUID"
 		[ "$ONE_PUUID" ] && echo "$ONE_PART" > "/tmp/disk/by-uuid/$ONE_PUUID"
 	done
+	IFS="$CUR_IFS"
 }
 
 get_fstype() {
@@ -398,18 +400,18 @@ copy_to_ram() {
 	return $STATUS
 }
 
-load_sfs() {
+mount_sfs() {
 	# "$1" = an sfs spec e.g. sdb2:/pup/test_it.sfs
 	# "$2" = sfs ident e.g. pdrv or fdrv
-	load_sfs_RET=""
+	mount_sfs_RET=""
 	local LO_PART LO_REL LO_IDENT LO_FULL_NAME LO_BASE_NAME LO_NEEDED LO_SUFX LO_MP
 	LO_PART="${1%%:*}"; LO_REL="${1#*:}"
 	spec2file "$1"
-	[ $? -eq 0 ] || { load_sfs_RET="$spec2file_RET"; return 3; }
+	[ $? -eq 0 ] || { mount_sfs_RET="$spec2file_RET"; return 3; }
 	LO_FULL_NAME="$spec2file_RET"; LO_BASE_NAME="${spec2file_RET##*/}"
-	[ -f "$LO_FULL_NAME" ] || { load_sfs_RET="$(printf "$L_ERR_SFS_NOT_FOUND" "$LO_REL" "$LO_PART")"; return 1; }
+	[ -f "$LO_FULL_NAME" ] || { mount_sfs_RET="$(printf "$L_ERR_SFS_NOT_FOUND" "$LO_REL" "$LO_PART")"; return 1; }
 	# validate sfs file here
-	[ -s "$LO_FULL_NAME" ] || { load_sfs_RET="$(printf "$L_ERR_ONEPART_NOT_OK" "$LO_PART" "$LO_REL")"; return 3; }
+	[ -s "$LO_FULL_NAME" ] || { mount_sfs_RET="$(printf "$L_ERR_ONEPART_NOT_OK" "$LO_PART" "$LO_REL")"; return 3; }
 	if [ "$2" = "pdrv" ];then
 		#for backwards compatibility
 		LO_IDENT="$L_LOAD_MESSAGE"
@@ -418,7 +420,7 @@ load_sfs() {
 		LO_IDENT="$2"
 		LO_SUFX="${2:0:1}"
 	fi
-	display_msg "$(printf "$L_LOADING_FILE" "$LO_BASE_NAME" "$LO_IDENT")" "-n"
+	display_msg "$(printf "$L_USING_FILE" "$LO_BASE_NAME" "$LO_IDENT")" "-n"
 	#error exits after this must include "check_status 1;"
 	LO_NEEDED='yes'
 	[ "LO_PART" = "rootfs" ] && COPY2RAM='yes' # humungus initrd support - force copy to ram
@@ -433,21 +435,22 @@ load_sfs() {
 	[ -d "$LO_MP" ] || mkdir -p "$LO_MP"
 	echo " Mounting $LO_FULL_NAME on $LO_MP."
 	mount -r -t squashfs -o ro,loop,noatime "$LO_FULL_NAME" "$LO_MP"
-	[ $? -eq 0 ] || { load_sfs_RET="$(printf "$L_ERR_ONEPART_MOUNT_SFS_FAILED" "$LO_PART" "$LO_REL")"; check_status 1; return 3; }
-	if [ "$LO_SUFX" = "a" -o "$LO_SUFX" = "y" ];then
-		echo " Inserting $LO_MP into aufs stack as rr branch."
-		mount -o remount,add:1:$LO_MP=rr /pup_new; STATUS=$?
-	else
-		echo " Appending $LO_MP to aufs stack as rr branch."
-		mount -o remount,append:$LO_MP=rr /pup_new; STATUS=$?
-	fi
-	[ $STATUS -eq 0 ] || { load_sfs_RET="$(printf "$L_ERR_AUFS_SFS_FAILED" "${LO_MP}=rr")"; check_status 1; return 3; }
+	[ $? -eq 0 ] || { mount_sfs_RET="$(printf "$L_ERR_ONEPART_MOUNT_SFS_FAILED" "$LO_PART" "$LO_REL")"; check_status 1; return 3; }
 	if [ "$LO_NEEDED" = "yes" ];then
 		[ "$(echo -n $KEEPMOUNTED | grep -m1 "$LO_PART")" ] || KEEPMOUNTED="${KEEPMOUNTED}${LO_PART} "
 	fi
-	load_sfs_RET="$LO_MP"
-#	NEWUNIONRECORD="${NEWUNIONRECORD}${LO_BASE_NAME} "
+	mount_sfs_RET="$LO_MP"
 	check_status 0
+}
+
+append_rr() {
+	# "$1" = a branch directories e.g. "/pup_f"
+	append_rr_RET=''
+	echo " Appending $1 to aufs stack as rr branch."
+	mount -o remount,append:${1}=rr /pup_new
+	[ $? -eq 0 ] || { append_rr_RET="$(printf "$L_ERR_AUFS_SFS_FAILED" "${1}=rr")"; return 1; }
+	NEWUNIONRECORD="${NEWUNIONRECORD}${1#/} "
+	return 0
 }
 
 #=============================================================
@@ -563,53 +566,107 @@ if [ "$sortout_sfs_spec_RET" ];then
 fi
 [ "$PDRV_PART" ] || fatal_error "$L_ERR_PDRV_NOT_SPECD"
 
-#create empty stack
+#create default size tmpfs
 [ -d /mnt/tmpfs ] || mkdir -p /mnt/tmpfs
 mount -t tmpfs tmpfs /mnt/tmpfs
-[ -d "/mnt/tmpfs/pup_rw" ] || mkdir /mnt/tmpfs/pup_rw
-[ -d "/pup_new" ] || mkdir /pup_new
-mount -t aufs -o udba=reval,diropq=w,br=/mnt/tmpfs/pup_rw=rw,xino=/mnt/tmpfs/.aufs.xino unionfs /pup_new 
-[ $? -eq 0 ] || fatal_error "$L_ERROR_FAILED_AUFS_STACK"
 
-#load pdrv
-load_sfs "$PDRV_SPEC" "pdrv"
-[ $? -eq 0 ] || fatal_error "$load_sfs_RET"
-PDRV_LAYER="$load_sfs_RET"
+#mount pdrv
+mount_sfs "$PDRV_SPEC" "pdrv"
+[ $? -eq 0 ] || fatal_error "$mount_sfs_RET"
+PDRV_DIR="$mount_sfs_RET"
 
-#load optional puppy sfs's
-sortout_sfs_spec "$FDRV" "$DISTRO_FDRVSFS"
+#mount optional puppy sfs's
+ABOVE_DIRS=''
+sortout_sfs_spec "$ADRV" "$DISTRO_ADRVSFS"
 if [ "$sortout_sfs_spec_RET" ];then
-	FDRV_SPEC="$sortout_sfs_spec_RET"
-	load_sfs "$FDRV_SPEC" "fdrv"
-	[ $? -eq 0 ] || { echo "$load_sfs_RET"; FDRV_SPEC=''; }
-fi
-sortout_sfs_spec "$ZDRV" "$DISTRO_ZDRVSFS"
-if [ "$sortout_sfs_spec_RET" ];then
-	ZDRV_SPEC="$sortout_sfs_spec_RET"
-	load_sfs "$ZDRV_SPEC" "zdrv"
-	[ $? -eq 0 ] || { echo "$load_sfs_RET"; ZDRV_SPEC=''; }
+	ADRV_SPEC="$sortout_sfs_spec_RET"
+	mount_sfs "$ADRV_SPEC" "adrv"
+	if [ $? -eq 0 ];then
+		ABOVE_DIRS="${ABOVE_DIRS}${mount_sfs_RET} "
+	else
+		echo "$mount_sfs_RET"; ADRV_SPEC=''
+	fi
 fi
 sortout_sfs_spec "$YDRV" "$DISTRO_YDRVSFS"
 if [ "$sortout_sfs_spec_RET" ];then
 	YDRV_SPEC="$sortout_sfs_spec_RET"
-	load_sfs "$YDRV_SPEC" "ydrv"
-	[ $? -eq 0 ] || { echo "$load_sfs_RET"; YDRV_SPEC=''; }
+	mount_sfs "$YDRV_SPEC" "ydrv"
+	if [ $? -eq 0 ];then
+		ABOVE_DIRS="${ABOVE_DIRS}${mount_sfs_RET} "
+	else
+		echo "$mount_sfs_RET"; YDRV_SPEC=''
+	fi
 fi
-sortout_sfs_spec "$ADRV" "$DISTRO_ADRVSFS"
+BELOW_DIRS=''
+sortout_sfs_spec "$FDRV" "$DISTRO_FDRVSFS"
 if [ "$sortout_sfs_spec_RET" ];then
-	ADRV_SPEC="$sortout_sfs_spec_RET"
-	load_sfs "$ADRV_SPEC" "adrv"
-	[ $? -eq 0 ] || { echo "$load_sfs_RET"; ADRV_SPEC=''; }
+	FDRV_SPEC="$sortout_sfs_spec_RET"
+	mount_sfs "$FDRV_SPEC" "fdrv"
+	if [ $? -eq 0 ];then
+		BELOW_DIRS="$BELOW_DIRS$mount_sfs_RET "
+	else
+		echo "$mount_sfs_RET"; FDRV_SPEC=''
+	fi
 fi
-
-PUPMODE=5
+sortout_sfs_spec "$ZDRV" "$DISTRO_ZDRVSFS"
+if [ "$sortout_sfs_spec_RET" ];then
+	ZDRV_SPEC="$sortout_sfs_spec_RET"
+	mount_sfs "$ZDRV_SPEC" "zdrv"
+	if [ $? -eq 0 ];then
+		BELOW_DIRS="${BELOW_DIRS}${mount_sfs_RET} "
+	else
+		echo "$mount_sfs_RET"; ZDRV_SPEC=''
+	fi
+fi
 
 umount_unneeded
 
-if [ "$DEV1FS" = "" ];then
-	get_fstype "$PDRV_PART"
-	DEV1FS="$get_fstype_RET"
+get_fstype "$PDRV_PART"
+DEV1FS="$get_fstype_RET"
+
+PUPMODE=5
+
+#setup rw directory
+RW_DIR=''
+if [ "$PNOCOPY" ];then
+	case $DEV1FS in
+		ext2|ext3|ext4|reiserfs|minix|f2fs)
+			ensure_mounted "$PDRV_PART"
+			if [ $? -eq 0 ];then
+				RW_DIR="${ensure_mounted_RET}${PSUBDIR}/${DISTRO_FILE_PREFIX}save_X"
+				if [ -d "$RW_DIR" ];then
+					PUPMODE=12
+					PUPSAVE="$PDRV_PART:${PSUBDIR}/${DISTRO_FILE_PREFIX}save_X"
+					SAVE_LAYER='/pup_rw'
+					PUP_HOME="$ensure_mounted_RET"
+				else
+					mkdir -p "$RW_DIR"
+				fi
+			fi
+		;;
+	esac
 fi
+if [ "$RW_DIR" = "" ];then
+	[ -d "/mnt/tmpfs/pup_rw" ] || mkdir /mnt/tmpfs/pup_rw
+	RW_DIR='/mnt/tmpfs/pup_rw'
+fi
+
+#build stack
+[ -d "/pup_new" ] || mkdir /pup_new
+mount -t aufs -o udba=reval,diropq=w,br=${RW_DIR}=rw,xino=/mnt/tmpfs/.aufs.xino unionfs /pup_new 
+[ $? -eq 0 ] || fatal_error "$L_ERROR_FAILED_AUFS_STACK"
+display_msg "$L_LOADING_AUFS" "-n"
+for ONE_DIR in $ABOVE_DIRS;do
+	append_rr "$ONE_DIR"
+	[ $? -eq 0 ] || echo "$append_rr_RET" 
+done
+append_rr "$PDRV_DIR"
+[ $? -eq 0 ] || { check_status 1; fatal_error "$append_rr_RET"; }
+for ONE_DIR in $BELOW_DIRS;do
+	append_rr "$ONE_DIR"
+	[ $? -eq 0 ] || echo "$append_rr_RET" 
+done
+check_status 0
 
 mkdir -p /pup_new/etc/rc.d
 ( # > /pup_new/etc/rc.d/PUPSTATE
@@ -617,9 +674,14 @@ echo "PUPMODE=$PUPMODE"
 echo "PDEV1='$PDRV_PART'"
 echo "DEV1FS='$DEV1FS'"
 echo "PUPSFS='$PDRV_SPEC'"
+echo "PUPSAVE='$PUPSAVE'"
 echo "PMEDIA='$PMEDIA'"
 echo '#these directories are unionfs/aufs layers in /initrd...'
-echo "PUP_LAYER='$PDRV_LAYER'"
+echo "SAVE_LAYER='$SAVE_LAYER'"
+echo "PUP_LAYER='$PDRV_DIR'"
+echo '#The partition that has the tahrsave file is mounted here...'
+echo "PUP_HOME='$PUP_HOME'"
+echo '#(in /initrd) ...note, /mnt/home is a link to it.'
 echo '#this file has extra kernel drivers and firmware...'
 echo "ZDRV='$ZDRV_SPEC'"
 echo "FDRV='$FDRV_SPEC'"
@@ -629,9 +691,15 @@ echo "PSUBDIR='$PSUBDIR'"
 [ -f /sbin/set_plang ] && plang_pupstate #echo
 ) > /pup_new/etc/rc.d/PUPSTATE
 
-#NEWUNIONRECORD="${NEWUNIONRECORD% }"
-echo "" > /pup_new/etc/rc.d/BOOTCONFIG
-echo "LASTUNIONRECORD=''" >> /pup_new/etc/rc.d/BOOTCONFIG
+if [ -f /pup_new/etc/rc.d/BOOTCONFIG ];then
+	. /pup_new/etc/rc.d/BOOTCONFIG
+	NEWUNIONRECORD="${NEWUNIONRECORD% }"
+	echo "PREVUNIONRECORD='$LASTUNIONRECORD'" > /pup_new/etc/rc.d/BOOTCONFIG
+	echo "LASTUNIONRECORD='$NEWUNIONRECORD'" >> /pup_new/etc/rc.d/BOOTCONFIG
+else
+	echo "" > /pup_new/etc/rc.d/BOOTCONFIG
+	echo "LASTUNIONRECORD=''" >> /pup_new/etc/rc.d/BOOTCONFIG
+fi
 
 echo -n "${L_SWITCH_ROOT}" > /dev/console
 
@@ -662,13 +730,13 @@ if [ "$ZONE_FILE" ];then
 fi
 
 # remove any leftover symbolic links for after switch
-[ -L /pup_new/initrd/pup_rw ] && rm -rf /pup_new/initrd/pup_rw
-[ -L /pup_new/initrd/pup_ro1 ] && rm -rf /pup_new/initrd/pup_ro1
-[ -L /pup_new/tmp ] && rm -fv /pup_new/tmp
+[ -L /pup_new/initrd/pup_rw ] && rm -f /pup_new/initrd/pup_rw
+[ -L /pup_new/initrd/pup_ro1 ] && rm -f /pup_new/initrd/pup_ro1
+[ -L /pup_new/tmp ] && rm -f /pup_new/tmp
 #setup symlinks for after switch
-if [ -d /pup_new/initrd/mnt/tmpfs/pup_rw ] ; then
+if [ -d /pup_new/initrd${RW_DIR} ] ; then
 	rm -rf /pup_new/initrd/pup_rw
-	ln -sv /initrd/mnt/tmpfs/pup_rw /pup_new/initrd/pup_rw #for after switch
+	ln -sv /initrd${RW_DIR} /pup_new/initrd/pup_rw #for after switch
 fi
 if [ -d /pup_new/initrd/mnt/tmpfs/pup_ro1 ] ; then
 	rm -rf /pup_new/initrd/pup_ro1
@@ -683,7 +751,7 @@ if [ -d /pup_new/initrd/mnt/tmpfs/tmp ];then #extra paranoid precaution
 fi
 
 #copy /tmp
-[ -d "/pup_new/initrd/tmp" ] && rm -r -f /pup_new/initrd/tmp
+[ -d "/pup_new/initrd/tmp" ] && rm -rf /pup_new/initrd/tmp
 mkdir -p /pup_new/initrd/tmp
 cp -af /tmp/* /pup_new/initrd/tmp/ #keep any log files.
 
