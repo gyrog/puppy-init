@@ -661,7 +661,10 @@ fi
 PUPMODE=5
 
 #setup rw directory
-RW_DIR=''; SAVE_LAYER=''
+RO_DIR=''
+RW_DIR='/mnt/tmpfs/pup_rw'
+WK_DIR='/mnt/tmpfs/pup_wk'
+SAVE_LAYER=''
 expand_file_spec "${DISTRO_FILE_PREFIX}save" "$PSAVE"
 if [ $? -eq 0 ];then
 	SAVE_SPEC="$expand_file_spec_RET"
@@ -669,28 +672,59 @@ if [ $? -eq 0 ];then
 	SAVE_REL=${SAVE_SPEC#*:}
 	PSAVEPART=$SAVE_PART
 	PSAVEDIR=${SAVE_REL%/*}
-	if [ "$PNOCOPY" ];then
-		case $DEV1FS in
-			ext2|ext3|ext4|reiserfs|minix|f2fs)
-				ensure_mounted "$SAVE_PART"
-				if [ $? -eq 0 ];then
+	ensure_mounted "$SAVE_PART"
+	if [ $? -eq 0 ];then
+		if [ -f "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" ];then
+#			SFS_MNT='/mnt/tmpfs/pup_sv'
+			SFS_MNT='/pup_sv'
+			[ -d "$SFS_MNT" ] || mkdir "$SFS_MNT"
+			mount -r -t squashfs -o ro,noatime "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" "$SFS_MNT"
+			if [ $? -eq 0 ];then
+				[ -d "$RW_DIR" ] || mkdir -p "$RW_DIR"
+				if [ "$PNOCOPY" ];then
 					[ "$(echo -n $KEEPMOUNTED | grep -m1 "$SAVE_PART")" ] || KEEPMOUNTED="${KEEPMOUNTED}${SAVE_PART} "
-					RW_DIR="${ensure_mounted_RET}${SAVE_REL}"
-					WK_DIR="${RW_DIR%/*}/${DISTRO_FILE_PREFIX}work"
-					if [ -d "$RW_DIR" ];then
-						PUPMODE=12
-						SAVE_LAYER='/pup_rw'
-						PUP_HOME="$ensure_mounted_RET"
-					fi
+					RO_DIR="${ensure_mounted_RET}${SAVE_REL}"
+					[ -d "$RO_DIR" ] || mkdir -p "$RO_DIR"
+#					split into "$RW_DIR" (ram) and "$RO_DIR" (save folder)
+					find "$SFS_MNT" -name '*' |
+					while IFS='' read SRC_FN;do
+						DST_FN="${SRC_FN#${SFS_MNT}}"
+						[ "${DST_FN:0:7}" = "/initrd" ] && continue
+						if [ -L "$SRC_FN" ];then
+							[ -d "${RW_DIR}${DST_FN%/*}" ] || mkdir -p "${RW_DIR}${DST_FN%/*}"
+							cp -af "$SRC_FN" "${RW_DIR}${DST_FN}"
+						elif [ -d "$SRC_FN" ];then
+							continue
+						elif [ -f "$SRC_FN" -a -s "$SRC_FN" ]; then
+							[ -d "${RO_DIR}${DST_FN%/*}" ] || mkdir -p "${RO_DIR}${DST_FN%/*}"
+							cp -af "$SRC_FN" "${RO_DIR}${DST_FN}"
+						else
+							[ -d "${RW_DIR}${DST_FN%/*}" ] || mkdir -p "${RW_DIR}${DST_FN%/*}"
+							cp -af "$SRC_FN" "${RW_DIR}${DST_FN}"
+						fi
+					done
+					PUPMODE=29
+					SAVE_LAYER='/pup_ro1'
+					PUP_HOME="$ensure_mounted_RET"
+				else
+#					copy into "$RW_DIR" (ram)
+					find "$SFS_MNT" -name '*' |
+					while IFS='' read SRC_FN;do
+						DST_FN="${SRC_FN#${SFS_MNT}}"
+						[ "${DST_FN:0:7}" = "/initrd" ] && continue
+						if [ -d "$SRC_FN" ];then
+							[ -d "${RW_DIR}${DST_FN}" ] || mkdir "${RW_DIR}${DST_FN}"
+						else
+							cp -af "$SRC_FN" "${RW_DIR}${DST_FN}"
+						fi
+					done
+					PUPMODE=21
 				fi
-			;;
-		esac
+				umount "$SFS_MNT"
+			fi
+			rmdir "$SFS_MNT"
+		fi
 	fi
-fi
-if [ "$RW_DIR" = "" ];then
-	RW_DIR='/mnt/tmpfs/pup_rw'
-	WK_DIR='/mnt/tmpfs/pup_wk'
-	SAVE_REL='/tmpfs/pup_rw'
 fi
 
 umount_unneeded
@@ -699,12 +733,15 @@ umount_unneeded
 if [ "$SAVE_LAYER" ];then
 	display_msg "$(printf "${L_LOADING_PUPSAVE}" "$SAVE_REL" "$SAVE_PART")" "-n"
 else
-	display_msg "$(printf "${L_LOADING_RW}" "$SAVE_REL" )" "-n"
+	SAVE_SPEC=''
+	display_msg "$(printf "${L_LOADING_RW}" "$RW_DIR")" "-n"
 fi
 [ -d "$RW_DIR" ] || mkdir -p "$RW_DIR"
 [ -d "$WK_DIR" ] || mkdir -p "$WK_DIR"
 [ -d /pup_new ] || mkdir /pup_new
-mount -t overlay -o lowerdir=/pup_sfss,upperdir=${RW_DIR},workdir=${WK_DIR} overlay /pup_new >/dev/console 2>&1
+LOW_LIST='/pup_sfss'
+[ -d "$RO_DIR" ] && LOW_LIST="${RO_DIR}:${LOW_LIST}"
+mount -t overlay -o lowerdir=${LOW_LIST},upperdir=${RW_DIR},workdir=${WK_DIR} overlay /pup_new >/dev/console 2>&1
 [ $? -eq 0 ] || { check_status 1; fatal_error "$L_ERROR_FAILED_AUFS_STACK"; }
 check_status 0
 
@@ -769,7 +806,7 @@ chmod -x /pup_new/initrd/init
 [ -f /sbin/set_plang ] && plang_copy_to_newroot #$LANG, /etc/keymap|fontmap|codepage
 
 #set time zone link for after switch
-if [ "$ZONE_FILE" ];then
+if [ "$ZONE_FILE" -a $PUPMODE -eq 5 ];then
 	[ -f "/pup_new/usr/share/zoneinfo/$ZONE_FILE" ] && ln -snfv "/usr/share/zoneinfo/$ZONE_FILE" /pup_new/etc/localtime
 fi
 
@@ -778,13 +815,13 @@ fi
 [ -L /pup_new/initrd/pup_ro1 ] && rm -f /pup_new/initrd/pup_ro1
 [ -L /pup_new/tmp ] && rm -f /pup_new/tmp
 #setup symlinks for after switch
-if [ -d /pup_new/initrd${RW_DIR} ] ; then
+if [ "$RW_DIR" -a -d /pup_new/initrd${RW_DIR} ];then
 	rm -rf /pup_new/initrd/pup_rw
 	ln -sv /initrd${RW_DIR} /pup_new/initrd/pup_rw #for after switch
 fi
-if [ -d /pup_new/initrd/mnt/tmpfs/pup_ro1 ] ; then
+if [ "$RO_DIR" -a -d /pup_new/initrd${RO_DIR} ];then
 	rm -rf /pup_new/initrd/pup_ro1
-	ln -sv /initrd/mnt/tmpfs/pup_ro1 /pup_new/initrd/pup_ro1 #for after switch
+	ln -sv /initrd${RO_DIR} /pup_new/initrd/pup_ro1 #for after switch
 fi
 #setup /tmp for after switch
 mkdir -p /pup_new/initrd/mnt/tmpfs/tmp
