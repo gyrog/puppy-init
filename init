@@ -19,55 +19,30 @@
 L_WINDOWS_HIBERNATED="ERROR: Windows NTFS hibernated partition, cannot mount"
 L_DONE="done"
 L_FAILED="failed"
-L_DUMPING_BOOTINIT_LOG="Dumping last lines of /tmp/bootinit.log..."
-L_DUMPING_KERNEL_LOG="Dumping last lines of kernel log..."
 L_ERROR_IS_TOO_CRITICAL="Error is too critical, dropping out to console..."
-L_PAUSING_60_SECONDS="Pausing for 60 seconds..."
 L_USING_FILE="Using '%s' as the %s file..." #printf
-L_CANNOT_RESIZE_PUPSAVE="SORRY, cannot resize %s" #printf
-L_INCREASING_PUPSAVE='Increasing %s by %s Kbytes, please wait...' #printf
-L_LOADING_PUPSAVE='Loading personal storage %s [%s]...' #printf
-L_LOADING_PUPSAVE_FILE='Loading personal storage %s [%s] (%s)...' #printf
-L_UPGRADE_MSG_1="This personal storage was last used with version %s of Puppy." #printf
-L_UPGRADE_MSG_2="Hit the ENTER key only if it is okay to upgrade this file, or to not use it and boot up in RAM only type any other printable character."
-L_UPGRADE_MSG_3="ENTER only to upgrade: "
-L_UPGRADE_NO="Backing off, not using personal storage, booting in RAM only, PUPMODE=5..."
-L_LOADING_FROM_CD="Loading folder %s from CD/DVD..." #printf
+L_LOADING_PUPSAVE='Using personal storage %s [%s]...' #printf
 L_RAM_DISK_FULL="RAM disk full, copy failed at %s" #printf
-L_ADDING_SAVE_LAYER_FAILED="adding %s to aufs stack failed." #printf
 L_WAITING_FOR_USB="Waiting for USB storage."
-L_LOADING_KEYBOARD_LAYOUT="Loading '%s' keyboard layout..." #printf
 L_COPY_MESSAGE="copying to ram"
 L_LOAD_MESSAGE="main"
-L_PRE_MESSAGE="Loading puppy main sfs file."
-L_ERR_PDRV_INCOMPLETE="%s information is incomplete." #printf
-L_ERR_ONEPART_NOT_MOUNTED="%s is not mounted." #printf
 L_ERR_ONEPART_NOT_OK="%s %s is not Ok." #printf
 L_ERR_ONEPART_MOUNT_SFS_FAILED="[%s] %s mount of sfs failed." #printf
-L_ERR_AUFS_SFS_FAILED="aufs mount of %s failed." #printf
-L_ERR_TYPE_PUPSAVE="Type a number to choose which personal file to use:"
 L_DROPPED_TO_INITRD_SHELL="Dropped to initramfs shell. Type 'exec switch' to continue booting Puppy."
 L_SWITCH_ROOT="Performing a 'switch_root' to the layered filesystem..."
-L_CONTINUING_LOADING="...continuing with loading %s..." #printf
-L_FOLDER_MARKED_BAD="Folder %s marked bad." #printf
-L_0_NONE="0  none"
 L_ERROR_FAILED_AUFS_STACK='Failed to create overlay stack'
 L_ADDING_MODULE="Adding module %s" #printf
-L_NO_DISTRO_SPECS="No DISTRO_SPECS file found, assuming that personal storage is empty."
-L_DEBUG_SAVE="To save debug info to a partition, type 'debugsave'"
-L_PASSWORD="Password:"
-L_PASSWORD_MSG_1="NOTICE: As you type your password nothing will be displayed on the screen."
-L_PASSWORD_MSG_2="This is a security measure. Just type it in then press ENTER key..."
-L_SFFS_ERROR="ERROR: savefile filesystem is not ext2/3/4"
 L_ERR_SFS_NOT_FOUND="File \"%s\" not found on [%s]." #printf
 L_ERR_PART_NOT_FOUND="Puppy partition [%s] not found." #printf
 L_ERR_PART_NOT_MOUNT="Mounting %s on %s as %s failed.." #printf
 L_ERR_PDRV_NOT_SPECD="Puppy install partition is not specified."
 L_ERR_NO_DISTRO_SPECS="No DISTRO_SPECS file found."
-L_LOADING_SFS="Loading %s on %s..." #printf
-L_LOADING_RW="Using %s as read/write directory..." #printf
+L_LOADING_SFS="Mounting %s on %s..." #printf
 L_ERR_PDRV_NO_DEFAULT="Default filename for puppy...sfs not defined."
 L_ERR_NO_OVERLAY="OverlayFs is not supported by this kernel."
+L_COPY_SFS="Copying %s to %s..."
+L_SPLIT_SFS="Spliting %s to %s and %s..."
+L_PUPMODE="Booting with PUPMODE=%s"
 
 ##############################################################
 
@@ -132,7 +107,7 @@ fsck_func() {
 		FSCKDPARTS="${FSCKDPARTS}${1}|"
 		which "${FSCK_APP}" > /dev/null || { echo "WARNING: '${FSCK_APP}' not found"; return; }
 		echo "Doing fsck of ${1} as ${2} with ${FSCK_APP}."
-		${FSCK_APP} ${FSCK_OPT} ${1} > /dev/console 2>&1
+		${FSCK_APP} ${FSCK_OPT} ${1} 2>&1 | tee /dev/console
 	fi
 }
 
@@ -414,6 +389,7 @@ copy_to_ram() {
 mount_sfs() {
 	# "$1" = an sfs spec e.g. sdb2:/pup/test_it.sfs
 	# "$2" = sfs ident e.g. pdrv or fdrv
+	# Updates global variable NEWUNIONRECORD
 	mount_sfs_RET=""
 	local LO_PART LO_REL LO_IDENT LO_FULL_NAME LO_NEEDED LO_SUFX LO_MP LO_TIME
 	LO_PART="${1%%:*}"; LO_REL="${1#*:}"
@@ -423,7 +399,7 @@ mount_sfs() {
 	[ -f "$LO_FULL_NAME" ] || { mount_sfs_RET="$(printf "$L_ERR_SFS_NOT_FOUND" "$LO_REL" "$LO_PART")"; return 1; }
 	# validate sfs file here
 	[ -s "$LO_FULL_NAME" ] || { mount_sfs_RET="$(printf "$L_ERR_ONEPART_NOT_OK" "$LO_PART" "$LO_REL")"; return 3; }
-	LO_TIME="$(stat -c %Y "$LO_FULL_NAME")"
+	LO_TIME="$(stat -Lc %Y "$LO_FULL_NAME")"
 	if [ "$2" = "pdrv" ];then
 		#for backwards compatibility
 		LO_IDENT="$L_LOAD_MESSAGE"
@@ -455,7 +431,8 @@ mount_sfs() {
 	if [ "$LO_NEEDED" = "yes" ];then
 		[ "$(echo -n $KEEPMOUNTED | grep -m1 "$LO_PART")" ] || KEEPMOUNTED="${KEEPMOUNTED}${LO_PART} "
 	fi
-	mount_sfs_RET="$LO_MP:$LO_TIME"
+	mount_sfs_RET="$LO_MP"
+	NEWUNIONRECORD="${NEWUNIONRECORD}${LO_TIME} "
 	check_status 0
 }
 
@@ -588,7 +565,7 @@ if [ "$sortout_sfs_spec_RET" ];then
 	ADRV_SPEC="$sortout_sfs_spec_RET"
 	mount_sfs "$ADRV_SPEC" "adrv"
 	if [ $? -eq 0 ];then
-		ABOVE_MNTS="${ABOVE_MNTS}${mount_sfs_RET} "
+		ABOVE_MNTS="${ABOVE_MNTS}${mount_sfs_RET}:"
 	else
 		echo "$mount_sfs_RET"; ADRV_SPEC=''
 	fi
@@ -598,7 +575,7 @@ if [ "$sortout_sfs_spec_RET" ];then
 	YDRV_SPEC="$sortout_sfs_spec_RET"
 	mount_sfs "$YDRV_SPEC" "ydrv"
 	if [ $? -eq 0 ];then
-		ABOVE_MNTS="${ABOVE_MNTS}${mount_sfs_RET} "
+		ABOVE_MNTS="${ABOVE_MNTS}${mount_sfs_RET}:"
 	else
 		echo "$mount_sfs_RET"; YDRV_SPEC=''
 	fi
@@ -609,7 +586,7 @@ if [ "$sortout_sfs_spec_RET" ];then
 	FDRV_SPEC="$sortout_sfs_spec_RET"
 	mount_sfs "$FDRV_SPEC" "fdrv"
 	if [ $? -eq 0 ];then
-		BELOW_MNTS="$BELOW_MNTS$mount_sfs_RET "
+		BELOW_MNTS="$BELOW_MNTS$mount_sfs_RET:"
 	else
 		echo "$mount_sfs_RET"; FDRV_SPEC=''
 	fi
@@ -620,7 +597,7 @@ if [ "$sortout_sfs_spec_RET" ];then
 	ZDRV_SPEC="$sortout_sfs_spec_RET"
 	mount_sfs "$ZDRV_SPEC" "zdrv"
 	if [ $? -eq 0 ];then
-		BELOW_MNTS="${BELOW_MNTS}${mount_sfs_RET} "
+		BELOW_MNTS="${BELOW_MNTS}${mount_sfs_RET}:"
 		ZDRV_MNTPT="${mount_sfs_RET%%:*}"
 	else
 		echo "$mount_sfs_RET"; ZDRV_SPEC=''
@@ -638,7 +615,7 @@ if [ "$XTRA_SFS" ];then
 				NUM=${NEXT#/dev/loop}; NUM=${NUM#/}
 				mount_sfs "$sortout_sfs_spec_RET" "extra_${NUM}"
 				if [ $? -eq 0 ];then
-					XTRA_MNTS="${XTRA_MNTS}${mount_sfs_RET} "
+					XTRA_MNTS="${XTRA_MNTS}${mount_sfs_RET}:"
 				else
 					echo "$mount_sfs_RET"
 				fi
@@ -663,12 +640,9 @@ fi
 [ "$POVERLAY" ] || fatal_error "$L_ERR_NO_OVERLAY"
 
 #build sfs stack
-NEWUNIONRECORD="${ABOVE_MNTS}${PDRV_MNT} ${BELOW_MNTS}${XTRA_MNTS}"; NEWUNIONRECORD="${NEWUNIONRECORD% }"
-for ONE_DIR in $NEWUNIONRECORD;do
-	LOW_LIST="${LOW_LIST}${ONE_DIR%%:*}:"
-done
+LOW_LIST="${ABOVE_MNTS}${PDRV_MNT}:${BELOW_MNTS}${XTRA_MNTS}"; 
 LOW_LIST="${LOW_LIST%:}" #remove trailing ':'
-display_msg "$(printf "${L_LOADING_SFS}" "$LOW_LIST" "/pup_sfss")" "-n"
+display_msg "$(printf "${L_LOADING_SFS}" "$(echo $LOW_LIST | tr -d '/')" "/pup_sfss")" "-n"
 [ -d /pup_sfss ] || mkdir /pup_sfss
 mount -t overlay -o ro,noatime,lowerdir=${LOW_LIST} overlay /pup_sfss >/dev/console 2>&1
 [ $? -eq 0 ] || { check_status 1; fatal_error "$L_ERROR_FAILED_AUFS_STACK"; }
@@ -686,6 +660,7 @@ fi
 split_ram_sfs() {
 	# "$1" - ram destination directory - ex: /mnt/tmpfs/pup_rw
 	# "$2" - disk destination directory - ex: /mnt/sdc2/puppy/slackosave
+	display_msg "$(printf "${L_SPLIT_SFS}" "${SAVE_SFS_FN##*/}" "${2##*/}" "${1##*/}")" "-n"
 	[ -d "${1}" ] || mkdir -p "${1}"
 	[ -d "${2}" ] || mkdir -p "${2}"
 	SFS_MNT='/pup_sv'
@@ -717,10 +692,12 @@ split_ram_sfs() {
 		sync
 	fi
 	rmdir "$SFS_MNT"
+	check_status 0
 }
 
 copy_ram_sfs() {
 	# "$1" - destination directory - ex: /mnt/tmpfs/pup_rw
+	display_msg "$(printf "${L_COPY_SFS}" "${SAVE_SFS_FN##*/}" "${1##*/}")" "-n"
 	[ -d "${1}" ] || mkdir -p "${1}"
 	SFS_MNT='/pup_sv'
 	[ -d "$SFS_MNT" ] || mkdir "$SFS_MNT"
@@ -745,6 +722,7 @@ copy_ram_sfs() {
 		sync
 	fi
 	rmdir "$SFS_MNT"
+	check_status 0
 }
 
 #sortout save layer
@@ -752,7 +730,7 @@ PUPMODE=5
 
 #setup rw directory
 RO_DIR=''; RW_DIR=''; WK_DIR=''
-SAVE_LAYER=''
+SAVE_LAYER=''; RW_LAYER=''
 if [ "$PRAMONLY" = "yes" ];then
 	PNOSAVE='yes'
 else
@@ -774,16 +752,29 @@ else
 			if [ -d "${ensure_mounted_RET}${SAVE_REL}" -a "$IS_LINUX" ];then
 				if [ "$PROSAVE" ];then
 					RW_DIR='/mnt/tmpfs/pup_rw'
-					[ -f "${SAVE_SFS_FN}" ] && split_ram_sfs "$RW_DIR" "${ensure_mounted_RET}${SAVE_REL}" 
+					SAVE_TAR_FN="${ensure_mounted_RET}${SAVE_REL}.ram.tar"
+					if [ -f "$SAVE_SFS_FN" ];then
+						split_ram_sfs "$RW_DIR" "${ensure_mounted_RET}${SAVE_REL}"
+					elif [ -f "$SAVE_TAR_FN" ];then
+						[ -d "${RW_DIR%/*}" ] || mkdir -p "${RW_DIR%/*}"
+						[ "$RW_DIR" ] && [ -d "$RW_DIR" ] && rm -r -f "$RW_DIR"
+						tar xf "$SAVE_TAR_FN" -C "${RW_DIR%/*}" >/dev/null 2>&1
+					fi
 					if [ "$(ls -A "${ensure_mounted_RET}${SAVE_REL}")" ];then
 						[ "$(echo -n $KEEPMOUNTED | grep -m1 "$SAVE_PART")" ] || KEEPMOUNTED="${KEEPMOUNTED}${SAVE_PART} "
 						RO_DIR="${ensure_mounted_RET}${SAVE_REL}"
 						PUPMODE=29
 						SAVE_LAYER='/pup_ro1'
+						RW_LAYER='/pup_rw'
 						PUP_HOME="$ensure_mounted_RET"
+						if [ -f "$SAVE_SFS_FN" ];then
+							rm -f "$SAVE_TAR_FN"
+							tar cf "$SAVE_TAR_FN" -C "${RW_DIR%/*}" "${RW_DIR##*/}/" >/dev/null 2>&1
+							rm -f "$SAVE_SFS_FN"
+						fi
 					fi
 				else
-					[ -f "${SAVE_SFS_FN}" ] && copy_ram_sfs "${ensure_mounted_RET}${SAVE_REL}"
+					[ -f "$SAVE_SFS_FN" ] && copy_ram_sfs "${ensure_mounted_RET}${SAVE_REL}"
 					if [ "$(ls -A "${ensure_mounted_RET}${SAVE_REL}")" ];then
 						[ "$(echo -n $KEEPMOUNTED | grep -m1 "$SAVE_PART")" ] || KEEPMOUNTED="${KEEPMOUNTED}${SAVE_PART} "
 						RW_DIR="${ensure_mounted_RET}${SAVE_REL}"
@@ -791,17 +782,13 @@ else
 						PUPMODE=12
 						SAVE_LAYER='/pup_rw'
 						PUP_HOME="$ensure_mounted_RET"
-						if [ -f "${SAVE_SFS_FN}" ];then
-							[ -f "${SAVE_SFS_FN}.bak" ] && rm "${SAVE_SFS_FN}.bak"
-							mv "${SAVE_SFS_FN}" "${SAVE_SFS_FN}.bak"
-						fi
+						[ -f "$SAVE_SFS_FN" ] && rm -f "$SAVE_SFS_FN"
 					fi
 				fi
 			fi
 			if [ $PUPMODE -eq 5 ];then
-				if [ -f "${SAVE_SFS_FN}" ];then
+				if [ -f "$SAVE_SFS_FN" ];then
 					RW_DIR='/mnt/tmpfs/pup_rw'
-					echo "Priming $RW_DIR from ${SAVE_SFS_FN}"
 					copy_ram_sfs "$RW_DIR"
 					if [ "$(ls -A "$RW_DIR")" ];then
 						PUPMODE=21
@@ -813,22 +800,26 @@ else
 fi
 
 umount_unneeded
+display_msg "$(printf "${L_PUPMODE}" "$PUPMODE")"
 
 #build full stack
 [ "$RW_DIR" ] || RW_DIR='/mnt/tmpfs/pup_rw'
 [ "$WK_DIR" ] || WK_DIR='/mnt/tmpfs/pup_wk'
 if [ $PUPMODE -eq 12 -o $PUPMODE -eq 29 ];then
 	display_msg "$(printf "${L_LOADING_PUPSAVE}" "$SAVE_REL" "$SAVE_PART")" "-n"
+	check_status 0
 else
-	display_msg "$(printf "${L_LOADING_RW}" "$RW_DIR")" "-n"
 	SAVE_SPEC=''
 fi
 [ -d "$RW_DIR" ] || mkdir -p "$RW_DIR"
 [ -d "$WK_DIR" ] || mkdir -p "$WK_DIR"
 [ -d /pup_new ] || mkdir /pup_new
-LOW_LIST='/pup_sfss'
-[ -d "$RO_DIR" ] && LOW_LIST="${RO_DIR}:${LOW_LIST}"
-echo "mount -t overlay -o lowerdir=${LOW_LIST},upperdir=${RW_DIR},workdir=${WK_DIR} overlay /pup_new"
+LOW_LIST='/pup_sfss'; LOW_DISP='pup_sfss'
+if [ -d "$RO_DIR" ];then
+	LOW_LIST="${RO_DIR}:${LOW_LIST}"
+	LOW_DISP="${RO_DIR##*/}:${LOW_DISP}"
+fi
+display_msg "$(printf "${L_LOADING_SFS}" "${RW_DIR##*/}:${LOW_DISP}" "/pup_new")" "-n"
 mount -t overlay -o lowerdir=${LOW_LIST},upperdir=${RW_DIR},workdir=${WK_DIR} overlay /pup_new >/dev/console 2>&1
 [ $? -eq 0 ] || { check_status 1; fatal_error "$L_ERROR_FAILED_AUFS_STACK"; }
 check_status 0
@@ -841,7 +832,8 @@ echo "DEV1FS='$DEV1FS'"
 echo "PUPSFS='$(echo_spec $PDRV_SPEC)'"
 echo "PUPSAVE='$(echo_spec $SAVE_SPEC)'"
 echo "PMEDIA='$PMEDIA'"
-echo '#these directories are unionfs/aufs layers in /initrd...'
+echo '#these directories are overlayfs layers in /initrd...'
+[ "$RW_LAYER" ] && echo "RW_LAYER='$RW_LAYER'"
 echo "SAVE_LAYER='$SAVE_LAYER'"
 echo "PUP_LAYER='${PDRV_MNT%%:*}'"
 echo '#The partition that has the tahrsave file is mounted here...'
@@ -865,9 +857,8 @@ if [ $PUPMODE -eq 5 ];then
 	echo "LASTUNIONRECORD=''" >> /pup_new/etc/rc.d/BOOTCONFIG
 else
 	[ -f /pup_new/etc/rc.d/BOOTCONFIG ] && . /pup_new/etc/rc.d/BOOTCONFIG
-	NEWUNIONRECORD="${NEWUNIONRECORD% }"
 	echo "PREVUNIONRECORD='$LASTUNIONRECORD'" > /pup_new/etc/rc.d/BOOTCONFIG
-	echo "LASTUNIONRECORD='$NEWUNIONRECORD'" >> /pup_new/etc/rc.d/BOOTCONFIG
+	echo "LASTUNIONRECORD='${NEWUNIONRECORD% }'" >> /pup_new/etc/rc.d/BOOTCONFIG
 fi
 
 echo -n "${L_SWITCH_ROOT}" > /dev/console
