@@ -661,62 +661,66 @@ fi
 PUPMODE=5
 
 #setup rw directory
-RO_DIR=''
-RW_DIR='/mnt/tmpfs/pup_rw'
-WK_DIR='/mnt/tmpfs/pup_wk'
+RO_DIR=''; RW_DIR=''; WK_DIR=''
 SAVE_LAYER=''
-expand_file_spec "${DISTRO_FILE_PREFIX}save" "$PSAVE"
-if [ $? -eq 0 ];then
-	SAVE_SPEC="$expand_file_spec_RET"
-	SAVE_PART=${SAVE_SPEC%%:*}
-	SAVE_REL=${SAVE_SPEC#*:}
-	PSAVEPART=$SAVE_PART
-	PSAVEDIR=${SAVE_REL%/*}
-	ensure_mounted "$SAVE_PART"
+if [ "$PRAMONLY" = "yes" ];then
+	PNOSAVE='yes'
+else
+	expand_file_spec "${DISTRO_FILE_PREFIX}save" "$PSAVE"
 	if [ $? -eq 0 ];then
-		get_fstype $SAVE_PART
-		IS_LINUX=''
-		case $get_fstype_RET in
-			ext2|ext3|ext4|reiserfs|minix|f2fs) IS_LINUX='yes' ;;
-		esac
-		if [ "$PNOCOPY" -a "$IS_LINUX" ];then
-			[ "$(echo -n $KEEPMOUNTED | grep -m1 "$SAVE_PART")" ] || KEEPMOUNTED="${KEEPMOUNTED}${SAVE_PART} "
-			RW_DIR="${ensure_mounted_RET}${SAVE_REL}"
-			WK_DIR="${RW_DIR%/*}/${DISTRO_FILE_PREFIX}work"
-			SAVE_LAYER='/pup_rw'
-			if [ -d "$RW_DIR" ];then
-				PUPMODE=12
-				PUP_HOME="$ensure_mounted_RET"
-			fi
-		elif [ -f "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" ];then
-			SFS_MNT='/pup_sv'
-			[ -d "$SFS_MNT" ] || mkdir "$SFS_MNT"
-			mount -r -t squashfs -o ro,noatime "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" "$SFS_MNT"
-			if [ $? -eq 0 ];then
-				[ -d "$RW_DIR" ] || mkdir -p "$RW_DIR"
-				find "$SFS_MNT" -name '*' |
-				while IFS='' read SRC_FN;do
-					DST_FN="${SRC_FN#${SFS_MNT}}"
-					case ${DST_FN:0:4} in
-						/sys|/tmp|/mnt) continue ;;
-					esac
-					[ "${DST_FN:0:7}" = "/initrd" ] && continue
-					if [ -L "$SRC_FN" ];then
-						cp -af "$SRC_FN" "${RW_DIR}${DST_FN}"
-					elif [ -d "$SRC_FN" ];then
-						[ -d "${RW_DIR}${DST_FN}" ] || mkdir "${RW_DIR}${DST_FN}"
-					else
-						cp -af "$SRC_FN" "${RW_DIR}${DST_FN}"
-					fi
-				done
-				umount "$SFS_MNT"
-				if [ "$PNOSAVE" != "yes" ];then
-					[ -f "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak" ] && rm "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak"
-					mv "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak"
+		SAVE_SPEC="$expand_file_spec_RET"
+		SAVE_PART=${SAVE_SPEC%%:*}
+		SAVE_REL=${SAVE_SPEC#*:}
+		PSAVEPART=$SAVE_PART
+		PSAVEDIR=${SAVE_REL%/*}
+		ensure_mounted "$SAVE_PART"
+		if [ $? -eq 0 ];then
+			get_fstype $SAVE_PART
+			IS_LINUX=''
+			case $get_fstype_RET in
+				ext2|ext3|ext4|reiserfs|minix|f2fs) IS_LINUX='yes' ;;
+			esac
+			if [ "$IS_LINUX" -a -d "${ensure_mounted_RET}${SAVE_REL}" ];then
+				[ "$(echo -n $KEEPMOUNTED | grep -m1 "$SAVE_PART")" ] || KEEPMOUNTED="${KEEPMOUNTED}${SAVE_PART} "
+				RW_DIR="${ensure_mounted_RET}${SAVE_REL}"
+				WK_DIR="${RW_DIR%/*}/${DISTRO_FILE_PREFIX}work"
+				SAVE_LAYER='/pup_rw'
+				if [ "$(ls "$RW_DIR")" ];then
+					PUPMODE=12
+					PUP_HOME="$ensure_mounted_RET"
 				fi
-				PUPMODE=21
+			elif [ -f "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" ];then
+				RW_DIR='/mnt/tmpfs/pup_rw'
+				SFS_MNT='/pup_sv'
+				[ -d "$SFS_MNT" ] || mkdir "$SFS_MNT"
+				mount -r -t squashfs -o ro,noatime "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" "$SFS_MNT"
+				if [ $? -eq 0 ];then
+					echo "Priming $RW_DIR from ${ensure_mounted_RET}${SAVE_REL}.ram.sfs"
+					[ -d "$RW_DIR" ] || mkdir -p "$RW_DIR"
+					find "$SFS_MNT" -name '*' |
+					while IFS='' read SRC_FN;do
+						DST_FN="${SRC_FN#${SFS_MNT}}"
+						case ${DST_FN:0:4} in
+							/sys|/tmp|/mnt) continue ;;
+						esac
+						[ "${DST_FN:0:7}" = "/initrd" ] && continue
+						if [ -L "$SRC_FN" ];then
+							cp -af "$SRC_FN" "${RW_DIR}${DST_FN}"
+						elif [ -d "$SRC_FN" ];then
+							[ -d "${RW_DIR}${DST_FN}" ] || mkdir "${RW_DIR}${DST_FN}"
+						else
+							cp -af "$SRC_FN" "${RW_DIR}${DST_FN}"
+						fi
+					done
+					umount "$SFS_MNT"
+					if [ "$PNOSAVE" != "yes" ];then
+						[ -f "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak" ] && rm "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak"
+						mv "${ensure_mounted_RET}${SAVE_REL}.ram.sfs" "${ensure_mounted_RET}${SAVE_REL}.ram.sfs.bak"
+					fi
+					PUPMODE=21
+				fi
+				rmdir "$SFS_MNT"
 			fi
-			rmdir "$SFS_MNT"
 		fi
 	fi
 fi
@@ -724,6 +728,8 @@ fi
 umount_unneeded
 
 #build full stack
+[ "$RW_DIR" ] || RW_DIR='/mnt/tmpfs/pup_rw'
+[ "$WK_DIR" ] || WK_DIR='/mnt/tmpfs/pup_wk'
 if [ $PUPMODE -eq 12 ];then
 	display_msg "$(printf "${L_LOADING_PUPSAVE}" "$SAVE_REL" "$SAVE_PART")" "-n"
 else
