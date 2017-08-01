@@ -695,9 +695,17 @@ if [ $? -eq 0 ];then
 							cp -af "$SRC_FN" "${RW_DIR}${DST_FN}"
 						elif [ -d "$SRC_FN" ];then
 							continue
-						elif [ -f "$SRC_FN" -a -s "$SRC_FN" ]; then
-							[ -d "${RO_DIR}${DST_FN%/*}" ] || mkdir -p "${RO_DIR}${DST_FN%/*}"
-							cp -af "$SRC_FN" "${RO_DIR}${DST_FN}"
+						elif [ -f "$SRC_FN" -a -s "$SRC_FN" ];then
+							case $SRC_FN in
+								*:*)
+									[ -d "${RW_DIR}${DST_FN%/*}" ] || mkdir -p "${RW_DIR}${DST_FN%/*}"
+									cp -af "$SRC_FN" "${RW_DIR}${DST_FN}"
+								;;
+								*)
+									[ -d "${RO_DIR}${DST_FN%/*}" ] || mkdir -p "${RO_DIR}${DST_FN%/*}"
+									cp -af "$SRC_FN" "${RO_DIR}${DST_FN}"
+								;;
+							esac
 						else
 							[ -d "${RW_DIR}${DST_FN%/*}" ] || mkdir -p "${RW_DIR}${DST_FN%/*}"
 							cp -af "$SRC_FN" "${RW_DIR}${DST_FN}"
@@ -741,6 +749,7 @@ fi
 [ -d /pup_new ] || mkdir /pup_new
 LOW_LIST='/pup_sfss'
 [ -d "$RO_DIR" ] && LOW_LIST="${RO_DIR}:${LOW_LIST}"
+echo "mount -t overlay -o lowerdir=${LOW_LIST},upperdir=${RW_DIR},workdir=${WK_DIR} overlay /pup_new"
 mount -t overlay -o lowerdir=${LOW_LIST},upperdir=${RW_DIR},workdir=${WK_DIR} overlay /pup_new >/dev/console 2>&1
 [ $? -eq 0 ] || { check_status 1; fatal_error "$L_ERROR_FAILED_AUFS_STACK"; }
 check_status 0
