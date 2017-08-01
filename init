@@ -64,7 +64,7 @@ L_ERR_PART_NOT_FOUND="Puppy partition [%s] not found." #printf
 L_ERR_PART_NOT_MOUNT="Mounting %s on %s as %s failed.." #printf
 L_ERR_PDRV_NOT_SPECD="Puppy install partition is not specified."
 L_ERR_NO_DISTRO_SPECS="No DISTRO_SPECS file found."
-L_LOADING_SFS="Loading %s as read only overlay..." #printf
+L_LOADING_SFS="Loading %s on %s..." #printf
 L_LOADING_RW="Using %s as read/write directory..." #printf
 L_ERR_PDRV_NO_DEFAULT="Default filename for puppy...sfs not defined."
 L_ERR_NO_OVERLAY="OverlayFs is not supported by this kernel."
@@ -326,8 +326,8 @@ expand_file_spec() {
 	[ "$LO_FN" ] || LO_FN="$1"
 	case $LO_FN in
 		*/*)
-			[ "${LO_FN:0:1}" != "/" ] && LO_FN="/$LO_FN"
-#			[ "${LO_FN:0:1}" != "/" ] && LO_FN="$PSUBDIR/$LO_FN"
+#			[ "${LO_FN:0:1}" != "/" ] && LO_FN="/$LO_FN"
+			[ "${LO_FN:0:1}" != "/" ] && LO_FN="$PSUBDIR/$LO_FN"
 			case $LO_FN in
 				*/) LO_FN="${LO_FN}${1}" ;;
 			esac
@@ -430,7 +430,11 @@ mount_sfs() {
 		LO_SUFX='ro2'
 	else
 		LO_IDENT="$2"
-		LO_SUFX="${2:0:1}"
+		if [ "${2:0:6}" = "extra_" ];then
+			LO_SUFX="${2#extra_}"
+		else
+			LO_SUFX="${2:0:1}"
+		fi
 	fi
 	display_msg "$(printf "$L_USING_FILE" "${spec2file_RET##*/}" "$LO_IDENT")" "-n"
 	#error exits after this must include "check_status 1;"
@@ -632,7 +636,7 @@ if [ "$XTRA_SFS" ];then
 			NEXT="$(losetup -f 2>/dev/null)"
 			if [ "$NEXT" ];then
 				NUM=${NEXT#/dev/loop}; NUM=${NUM#/}
-				mount_sfs "$sortout_sfs_spec_RET" "$NUM"
+				mount_sfs "$sortout_sfs_spec_RET" "extra_${NUM}"
 				if [ $? -eq 0 ];then
 					XTRA_MNTS="${XTRA_MNTS}${mount_sfs_RET} "
 				else
@@ -664,7 +668,7 @@ for ONE_DIR in $NEWUNIONRECORD;do
 	LOW_LIST="${LOW_LIST}${ONE_DIR%%:*}:"
 done
 LOW_LIST="${LOW_LIST%:}" #remove trailing ':'
-display_msg "$(printf "${L_LOADING_SFS}" "$LOW_LIST")" "-n"
+display_msg "$(printf "${L_LOADING_SFS}" "$LOW_LIST" "/pup_sfss")" "-n"
 [ -d /pup_sfss ] || mkdir /pup_sfss
 mount -t overlay -o ro,noatime,lowerdir=${LOW_LIST} overlay /pup_sfss >/dev/console 2>&1
 [ $? -eq 0 ] || { check_status 1; fatal_error "$L_ERROR_FAILED_AUFS_STACK"; }
